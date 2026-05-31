@@ -69,6 +69,21 @@ STATE: Dict[str, Any] = {
 }
 
 
+def race_response_payload(race: Dict[str, Any], index: int) -> Dict[str, Any]:
+    total_events = len(race["events"])
+    safe_index = min(max(index, 0), total_events - 1)
+    return {
+        "ok": True,
+        "race": race,
+        "index": safe_index,
+        "current_index": safe_index,
+        "current_event_number": safe_index + 1,
+        "total_events": total_events,
+        "is_last_event": safe_index >= total_events - 1,
+        "event": race["events"][safe_index],
+    }
+
+
 def tank_to_public_dict(t: sim_engine.TankSpec) -> Dict[str, Any]:
     return {
         "name": t.name,
@@ -398,7 +413,7 @@ def api_new_race():
     race = create_race(rank, program, seed)
     STATE["race"] = race
     STATE["index"] = 0
-    return jsonify({"ok": True, "race": race, "index": 0})
+    return jsonify(race_response_payload(race, 0))
 
 
 @app.post("/api/next")
@@ -407,7 +422,7 @@ def api_next():
     if race is None:
         return jsonify({"ok": False, "error": "race is not initialized"}), 400
     STATE["index"] = min(STATE["index"] + 1, len(race["events"]) - 1)
-    return jsonify({"ok": True, "index": STATE["index"], "event": race["events"][STATE["index"]]})
+    return jsonify(race_response_payload(race, STATE["index"]))
 
 
 @app.post("/api/prev")
@@ -416,7 +431,7 @@ def api_prev():
     if race is None:
         return jsonify({"ok": False, "error": "race is not initialized"}), 400
     STATE["index"] = max(STATE["index"] - 1, 0)
-    return jsonify({"ok": True, "index": STATE["index"], "event": race["events"][STATE["index"]]})
+    return jsonify(race_response_payload(race, STATE["index"]))
 
 
 @app.post("/api/reset_view")
@@ -425,21 +440,24 @@ def api_reset_view():
         return jsonify({"ok": False, "error": "race is not initialized"}), 400
     STATE["index"] = 0
     race = STATE["race"]
-    return jsonify({"ok": True, "index": 0, "event": race["events"][0]})
+    return jsonify(race_response_payload(race, 0))
 
 
 @app.get("/api/state")
 def api_state():
     race = STATE.get("race")
     if race is None:
-        return jsonify({"ok": False, "race": None, "index": 0})
+        return jsonify({
+            "ok": False,
+            "race": None,
+            "index": 0,
+            "current_index": 0,
+            "current_event_number": 0,
+            "total_events": 0,
+            "is_last_event": True,
+        })
     idx = STATE.get("index", 0)
-    return jsonify({
-        "ok": True,
-        "race": race,
-        "index": idx,
-        "event": race["events"][idx],
-    })
+    return jsonify(race_response_payload(race, idx))
 
 
 if __name__ == "__main__":
