@@ -42,9 +42,29 @@
       </aside>
     </section>
 
-    <section class="cinema-log" id="cinemaLog">
-      <h2 id="eventTitle">待機中</h2>
-      <p id="eventText">GM管理画面でレースを生成してください。</p>
+    <section class="bottom-layout" id="bottomLayout">
+      <section class="dice-panel" id="dicePanel" hidden>
+        <div class="dice-label" id="diceLabel">判定</div>
+        <div class="dice-numbers">
+          <span id="diceDie1">-</span>
+          <span class="dice-operator">+</span>
+          <span id="diceDie2">-</span>
+          <span class="dice-operator">=</span>
+          <strong id="diceSum">-</strong>
+        </div>
+        <div class="dice-formula" id="diceFormula"></div>
+        <div class="dice-meta">
+          <span>補正 <strong id="diceBonus">+0</strong></span>
+          <span>達成 <strong id="diceTotal">-</strong></span>
+          <span id="diceTargetWrap"><span id="diceTargetLabel">目標</span> <strong id="diceTarget">-</strong></span>
+        </div>
+        <div class="dice-result" id="diceResult">待機中</div>
+      </section>
+
+      <section class="cinema-log" id="cinemaLog">
+        <h2 id="eventTitle">待機中</h2>
+        <p id="eventText">GM管理画面でレースを生成してください。</p>
+      </section>
     </section>
   </main>
   <script src="/static/display.js"></script>

@@ -1,4 +1,6 @@
 const TYPEWRITER_SPEED_MS = 28;
+const DICE_ROLL_DURATION_MS = 900;
+const DICE_ROLL_TICK_MS = 55;
 const CINEMA_EMPHASIS_CLASSES = [
   'cinema-log--accident',
   'cinema-log--hit',
@@ -6,11 +8,20 @@ const CINEMA_EMPHASIS_CLASSES = [
   'cinema-log--goal',
   'cinema-log--success',
 ];
+const DICE_RESULT_CLASSES = [
+  'dice-panel--success',
+  'dice-panel--failure',
+  'dice-panel--crit',
+  'dice-panel--fumble',
+];
 
 let lastIndex = -1;
 let lastRaceKey = '';
 let typewriterTimer = null;
 let typewriterRunId = 0;
+let diceRollTimer = null;
+let diceRollStopTimer = null;
+let diceRunId = 0;
 
 function areaId(area) {
   if (area === '後列') return 'lane-back';
@@ -51,12 +62,126 @@ function safeText(value) {
   return String(value);
 }
 
+function setText(id, value) {
+  document.getElementById(id).textContent = safeText(value);
+}
+
 function stopTypewriter() {
   typewriterRunId += 1;
   if (typewriterTimer !== null) {
     clearTimeout(typewriterTimer);
     typewriterTimer = null;
   }
+}
+
+function stopDiceRoll() {
+  diceRunId += 1;
+  if (diceRollTimer !== null) {
+    clearInterval(diceRollTimer);
+    diceRollTimer = null;
+  }
+  if (diceRollStopTimer !== null) {
+    clearTimeout(diceRollStopTimer);
+    diceRollStopTimer = null;
+  }
+}
+
+function randomDie() {
+  return Math.floor(Math.random() * 6) + 1;
+}
+
+function dicePairFromSum(dice) {
+  const pairs = [];
+  for (let d1 = 1; d1 <= 6; d1 += 1) {
+    const d2 = dice - d1;
+    if (d2 >= 1 && d2 <= 6) {
+      pairs.push([d1, d2]);
+    }
+  }
+  return pairs.length ? pairs[Math.floor(pairs.length / 2)] : [1, 1];
+}
+
+function finalDiceValues(diceInfo) {
+  if (Array.isArray(diceInfo.diceValues) && diceInfo.diceValues.length === 2) {
+    return diceInfo.diceValues;
+  }
+  return dicePairFromSum(Number(diceInfo.dice || 2));
+}
+
+function formatBonus(value) {
+  const numberValue = Number(value || 0);
+  if (numberValue > 0) return `+${numberValue}`;
+  return String(numberValue);
+}
+
+function setDiceResultClass(resultClass) {
+  const dicePanel = document.getElementById('dicePanel');
+  dicePanel.classList.remove(...DICE_RESULT_CLASSES);
+  if (resultClass) {
+    dicePanel.classList.add(`dice-panel--${resultClass}`);
+  }
+}
+
+function renderDiceNumbers(d1, d2, diceInfo, finalFrame = false) {
+  const diceSum = d1 + d2;
+  const bonus = Number(diceInfo.bonus || 0);
+  const displayedTotal = finalFrame ? diceInfo.total : diceSum + bonus;
+
+  setText('diceDie1', d1);
+  setText('diceDie2', d2);
+  setText('diceSum', diceSum);
+  setText('diceBonus', formatBonus(bonus));
+  setText('diceTotal', displayedTotal);
+}
+
+function renderDiceFinal(diceInfo) {
+  const [d1, d2] = finalDiceValues(diceInfo);
+  renderDiceNumbers(d1, d2, diceInfo, true);
+  setText('diceResult', diceInfo.result || '判定');
+  setDiceResultClass(diceInfo.resultClass || 'success');
+}
+
+function hideDicePanel() {
+  stopDiceRoll();
+  document.getElementById('dicePanel').hidden = true;
+  document.getElementById('bottomLayout').classList.remove('has-dice');
+  setDiceResultClass('');
+}
+
+function showDicePanel(diceInfo) {
+  const dicePanel = document.getElementById('dicePanel');
+  dicePanel.hidden = false;
+  document.getElementById('bottomLayout').classList.add('has-dice');
+  setDiceResultClass('');
+  setText('diceLabel', diceInfo.label || '判定');
+  setText('diceFormula', diceInfo.breakdown || '');
+  setText('diceTargetLabel', diceInfo.targetLabel || '目標');
+  setText('diceTarget', diceInfo.target ?? '-');
+  setText('diceResult', '判定中');
+}
+
+function rollDicePanel(diceInfo) {
+  if (!diceInfo) {
+    hideDicePanel();
+    return;
+  }
+
+  stopDiceRoll();
+  showDicePanel(diceInfo);
+
+  const runId = diceRunId;
+  const tick = () => {
+    if (runId !== diceRunId) return;
+    renderDiceNumbers(randomDie(), randomDie(), diceInfo, false);
+  };
+
+  tick();
+  diceRollTimer = setInterval(tick, DICE_ROLL_TICK_MS);
+  diceRollStopTimer = setTimeout(() => {
+    if (runId !== diceRunId) return;
+    stopDiceRoll();
+    renderDiceFinal(diceInfo);
+  }, DICE_ROLL_DURATION_MS);
 }
 
 function typewriterText(element, text) {
@@ -136,6 +261,7 @@ function renderDisplay(state) {
   document.getElementById('seedBox').textContent = `seed: ${race.seed} / event ${eventNumber}/${totalEvents}`;
   document.getElementById('eventTitle').textContent = event.title || '実況';
   updateCinemaEmphasis(event);
+  rollDicePanel(event.diceInfo);
   typewriterText(document.getElementById('eventText'), event.text);
 
   const lanes = {
