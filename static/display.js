@@ -127,10 +127,13 @@ function renderDisplay(state) {
   const race = state.race;
   const event = state.event || {};
   const board = event.board || {};
+  const eventIndex = state.current_index ?? state.index ?? 0;
+  const eventNumber = state.current_event_number ?? (eventIndex + 1);
+  const totalEvents = state.total_events ?? race.events.length;
 
   document.getElementById('raceTitle').textContent = `${race.rank}級 ${race.programLabel}`;
   document.getElementById('roundName').textContent = event.roundName || (event.round ? `第${event.round}R` : '開幕');
-  document.getElementById('seedBox').textContent = `seed: ${race.seed} / event ${state.index + 1}/${race.events.length}`;
+  document.getElementById('seedBox').textContent = `seed: ${race.seed} / event ${eventNumber}/${totalEvents}`;
   document.getElementById('eventTitle').textContent = event.title || '実況';
   updateCinemaEmphasis(event);
   typewriterText(document.getElementById('eventText'), event.text);

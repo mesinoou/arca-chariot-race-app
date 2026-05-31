@@ -32,13 +32,19 @@
       <label>seed（空欄ならランダム）
         <input id="seed" type="number" placeholder="例：42">
       </label>
+      <label>自動再生間隔(ms)
+        <input id="autoInterval" type="number" min="500" step="100" value="2500">
+      </label>
     </div>
     <div class="actions">
       <button id="newRace">新規レース生成</button>
       <button id="prevEvent" class="secondary">前へ</button>
       <button id="nextEvent">次の演出へ</button>
       <button id="resetView" class="secondary">先頭へ戻す</button>
+      <button id="autoStart">自動再生開始</button>
+      <button id="autoStop" class="secondary" disabled>停止</button>
     </div>
+    <div id="autoStatus" class="auto-status">自動再生: 停止中</div>
   </section>
 
   <section class="panel">
