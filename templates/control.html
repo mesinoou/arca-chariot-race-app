@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>GM管理画面 - 鉄輪式戦車レース</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="page control-page">
+  <header class="topbar">
+    <h1>GM管理画面</h1>
+    <a href="/display" target="_blank">観客表示画面を開く</a>
+  </header>
+
+  <section class="panel settings">
+    <h2>レース設定</h2>
+    <div class="form-grid">
+      <label>ランク
+        <select id="rank">
+          <option>D</option><option>C</option><option>B</option><option selected>A</option><option>S</option>
+        </select>
+      </label>
+      <label>番組
+        <select id="program">
+          {% for key, label in programs.items() %}
+          <option value="{{key}}">{{label}}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>seed（空欄ならランダム）
+        <input id="seed" type="number" placeholder="例：42">
+      </label>
+    </div>
+    <div class="actions">
+      <button id="newRace">新規レース生成</button>
+      <button id="prevEvent" class="secondary">前へ</button>
+      <button id="nextEvent">次の演出へ</button>
+      <button id="resetView" class="secondary">先頭へ戻す</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>現在イベント</h2>
+    <div id="currentEvent" class="current-event">まだレースが生成されていません。</div>
+  </section>
+
+  <section class="panel split">
+    <div>
+      <h2>出走表</h2>
+      <div id="tankList"></div>
+    </div>
+    <div>
+      <h2>イベント一覧</h2>
+      <div id="eventList" class="event-list"></div>
+    </div>
+  </section>
+
+  <script src="/static/control.js"></script>
+</body>
+</html>
