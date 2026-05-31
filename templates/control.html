@@ -21,9 +21,12 @@
       </label>
       <label>番組
         <select id="program">
-          {% for key, label in programs.items() %}
-          <option value="{{key}}">{{label}}</option>
-          {% endfor %}
+          <option value="standard" selected>標準公式戦</option>
+          <option value="speed">高速戦</option>
+          <option value="technique">技巧戦</option>
+          <option value="heavy">重装戦</option>
+          <option value="shooting">射撃戦</option>
+          <option value="chaos">荒れ場戦</option>
         </select>
       </label>
       <label>seed（空欄ならランダム）

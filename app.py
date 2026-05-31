@@ -10,7 +10,7 @@
     GM管理画面:        http://127.0.0.1:5000/control
     Discord共有画面:   http://127.0.0.1:5000/display
 
-このMVPは、sim_engine.py の Ver.0.3 簡易シミュレーターを利用し、
+このMVPは、sim_engine.py の Ver.0.4 簡易シミュレーターを利用し、
 1レース分の詳細ログをイベント列に変換してブラウザ上で再生します。
 """
 
@@ -185,6 +185,55 @@ def log_to_events(
     for raw in log_lines:
         line = raw.rstrip()
         if not line:
+            continue
+
+        if line.strip() == "=== 配置決めフェーズ ===":
+            events.append({
+                "type": "placement_start",
+                "round": 0,
+                "roundName": "配置決め",
+                "title": "配置決めフェーズ",
+                "text": "各車が発走直後の位置取りに入る。前へ割り込むか、混戦に構えるか、後方から脚を溜めるか。",
+                "board": board,
+            })
+            continue
+
+        placement_match = re.search(
+            r"配置決め: (.+?) (前列狙い|中列配置|後列配置).*?→ (?:(大成功|成功|失敗|出目2・失敗)、)?(後列|中列|前列)(?:配置)? .*?\(駆(-?\d+) 安(-?\d+)\)",
+            line,
+        )
+        if placement_match:
+            name, intent, outcome, area, drive, stability = placement_match.groups()
+            name = name.strip()
+            board = {k: dict(v) for k, v in board.items()}
+            if name in board:
+                board[name]["area"] = area
+                board[name]["drive"] = int(drive)
+                board[name]["stability"] = int(stability)
+                board[name]["highlight"] = "move" if area == "前列" else ("success" if area == "後列" else "")
+            if intent == "前列狙い":
+                if outcome == "大成功":
+                    text = f"{name}が鮮やかに前列を奪取する。駆動力を温存したまま、先頭集団へ滑り込んだ。"
+                elif outcome == "成功":
+                    text = f"{name}が強引に前列へ割り込む。駆動力を使ったが、発走直後の好位置を取った。"
+                else:
+                    text = f"{name}は前列を狙うが割り込みきれない。駆動力と安定を削り、中列からの再加速を迫られる。"
+            elif intent == "後列配置":
+                text = f"{name}は後方に控える。序盤の位置を捨て、温存した駆動力で後半に賭ける構えだ。"
+            else:
+                text = f"{name}は中列に構える。混戦の中央で、出方をうかがう。"
+            events.append({
+                "type": "placement",
+                "round": 0,
+                "roundName": "配置決め",
+                "actor": name,
+                "title": f"{name}：{intent}",
+                "text": text,
+                "board": board,
+            })
+            if name in board:
+                board = {k: dict(v) for k, v in board.items()}
+                board[name]["highlight"] = ""
             continue
 
         round_match = re.match(r"=== R(\d+) ===", line.strip())

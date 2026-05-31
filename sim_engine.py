@@ -10,7 +10,7 @@
 - 卓上運用向けの簡易AIです。厳密な最適AIではありません。
 - これまでチャット上で出した統計値を完全再現する乱数シード・実装ログではなく、
   現行ルールを再検証するための再現用プログラムです。
-- 状態異常なし、大成功は出目11以上かつ自動成功、先行点倍化なしのVer.0.3相当です。
+- 状態異常なし、大成功は出目11以上かつ自動成功、先行点倍化なし、配置決めフェーズありのVer.0.4相当です。
 
 実行例:
     python chariot_race_sim_v03.py --program standard --rank A --races 20000 --seed 42
@@ -410,9 +410,12 @@ def make_program(rank: str, program: str) -> List[TankSpec]:
             pick("重戦車", 0), pick("射撃", 0), pick("荒くれ", 0),
         ]
     if program == "speed":
+        # Ver.0.4: 通常の高速戦は「逃げ2・追込2・万能2」。
+        # 旧来の逃げ3構成は、必要なら別番組「超高速戦」として追加する想定。
         return [
-            pick("逃げ", 0), pick("逃げ", 1), pick("逃げ", 2),
-            pick("追込", 0), pick("追込", 1), pick("万能", 0),
+            pick("逃げ", 0), pick("逃げ", 1),
+            pick("追込", 0), pick("追込", 1),
+            pick("万能", 0), pick("万能", 1),
         ]
     if program == "technique":
         return [
@@ -1128,6 +1131,101 @@ def final_order(rng: random.Random, tanks: List[TankState], log: Optional[List[s
     return [t for _, t in scored]
 
 
+
+# ============================================================
+# 配置決めフェーズ Ver.0.4
+# ============================================================
+
+PLACEMENT_WEIGHTS: Dict[str, Dict[str, int]] = {
+    # front / middle / back
+    "逃げ": {"front": 80, "middle": 15, "back": 5},
+    "追込": {"front": 15, "middle": 30, "back": 55},
+    "万能": {"front": 30, "middle": 50, "back": 20},
+    "重戦車": {"front": 25, "middle": 60, "back": 15},
+    "射撃": {"front": 10, "middle": 40, "back": 50},
+    "荒くれ": {"front": 50, "middle": 35, "back": 15},
+}
+
+
+def choose_placement(rng: random.Random, t: TankState) -> str:
+    weights = PLACEMENT_WEIGHTS.get(t.style, {"front": 25, "middle": 50, "back": 25})
+    total = sum(weights.values())
+    x = rng.uniform(0, total)
+    acc = 0.0
+    for key, weight in weights.items():
+        acc += weight
+        if x <= acc:
+            return key
+    return "middle"
+
+
+def resolve_placement_phase(
+    rng: random.Random,
+    tanks: List[TankState],
+    log: Optional[List[str]] = None,
+) -> None:
+    """レース開始前の初期配置決め。
+
+    前列狙い: 2d6 + 機動力 + 操縦性 / 目標値9
+      成功: 前列配置、駆動力-1
+      失敗: 中列配置、駆動力-1、安定値-1
+      出目2: 中列配置、駆動力-1、安定値-2
+      出目11以上: 自動成功・大成功、前列配置、駆動力消費なし
+    中列配置: 補正なし
+    後列配置: 駆動力+1
+    """
+    if log is not None:
+        log.append("\n=== 配置決めフェーズ ===")
+
+    for t in tanks:
+        intent = choose_placement(rng, t)
+        if intent == "back":
+            t.area = Area.BACK
+            t.drive += 1
+            if log is not None:
+                log.append(
+                    f"配置決め: {t.name} 後列配置 → 後列 駆動力+1 "
+                    f"(駆{t.drive} 安{t.stability})"
+                )
+            continue
+
+        if intent == "middle":
+            t.area = Area.MID
+            if log is not None:
+                log.append(
+                    f"配置決め: {t.name} 中列配置 → 中列 補正なし "
+                    f"(駆{t.drive} 安{t.stability})"
+                )
+            continue
+
+        # front
+        bonus = t.mobility + t.handling
+        r = roll_2d6(rng, bonus)
+        target = 9
+        if r.fumble:
+            t.area = Area.MID
+            t.drive = max(0, t.drive - 1)
+            t.lose_stability(2)
+            outcome = "出目2・失敗"
+        elif r.crit:
+            t.area = Area.FRONT
+            outcome = "大成功"
+        elif success(r, target):
+            t.area = Area.FRONT
+            t.drive = max(0, t.drive - 1)
+            outcome = "成功"
+        else:
+            t.area = Area.MID
+            t.drive = max(0, t.drive - 1)
+            t.lose_stability(1)
+            outcome = "失敗"
+
+        if log is not None:
+            log.append(
+                f"配置決め: {t.name} 前列狙い 出目{r.dice}+機{t.mobility}+操{t.handling}={r.total}"
+                f"/9 → {outcome}、{t.area.jp}配置 (駆{t.drive} 安{t.stability})"
+            )
+
 def race_once(
     specs: List[TankSpec],
     rng: random.Random,
@@ -1135,6 +1233,9 @@ def race_once(
 ) -> RaceResult:
     tanks = [TankState(spec=s) for s in specs]
     log: List[str] = []
+
+    # Ver.0.4: 出走直後の配置決めフェーズ
+    resolve_placement_phase(rng, tanks, log if log_enabled else None)
 
     for round_no in range(1, 7):
         if log_enabled:
