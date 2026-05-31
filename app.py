@@ -177,6 +177,144 @@ def classify_log_line(line: str) -> str:
     return "log"
 
 
+def dice_pair_from_sum(dice: int) -> List[int]:
+    pairs = [(a, dice - a) for a in range(1, 7) if 1 <= dice - a <= 6]
+    if not pairs:
+        return [1, 1]
+    return list(pairs[len(pairs) // 2])
+
+
+def dice_result_class(dice: int, result: str) -> str:
+    if dice == 2:
+        return "fumble"
+    if dice >= 11:
+        return "crit"
+    if result in ("成功", "命中", "順位判定"):
+        return "success"
+    return "failure"
+
+
+def dice_result_label(dice: int, result: str) -> str:
+    if dice == 2:
+        return "出目2 / 事故級失敗"
+    if dice >= 11:
+        return "大成功 / 自動成功"
+    return result
+
+
+def dice_label_from_line(line: str) -> str:
+    stripped = line.strip()
+    if "前列狙い" in stripped:
+        return "前列狙い"
+    if stripped.startswith("最終判定"):
+        return "最終順位判定"
+    if stripped.startswith("カーブ制御"):
+        return "カーブ制御"
+    if stripped.startswith("障害制御"):
+        return "障害制御"
+    if stripped.startswith("制御判定"):
+        return stripped.split(":", 1)[0]
+
+    action_match = re.match(r"[^:：]+[:：]([^ →]+)", stripped)
+    if action_match:
+        return action_match.group(1).split("→", 1)[0]
+    return "判定"
+
+
+def dice_info_from_parts(
+    line: str,
+    label: str,
+    dice: int,
+    total: int,
+    result: str,
+    target: Optional[int] = None,
+    target_label: str = "目標値",
+    opposed: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "label": label,
+        "dice": dice,
+        "diceValues": dice_pair_from_sum(dice),
+        "bonus": total - dice,
+        "total": total,
+        "target": target,
+        "targetLabel": target_label,
+        "result": dice_result_label(dice, result),
+        "rawResult": result,
+        "resultClass": dice_result_class(dice, result),
+        "breakdown": line.strip(),
+        "opposed": opposed,
+    }
+
+
+def parse_dice_info(line: str) -> Optional[Dict[str, Any]]:
+    stripped = line.strip()
+    label = dice_label_from_line(stripped)
+
+    opposed_match = re.search(
+        r"攻(?P<attack_dice>\d+)(?P<attack_formula>.*?)=(?P<attack_total>-?\d+)\s*/\s*"
+        r"避(?P<defense_dice>\d+)(?P<defense_formula>.*?)=(?P<defense_total>-?\d+)\s*"
+        r"→\s*(?P<result>命中|失敗)",
+        stripped,
+    )
+    if opposed_match:
+        attack_dice = int(opposed_match.group("attack_dice"))
+        attack_total = int(opposed_match.group("attack_total"))
+        defense_dice = int(opposed_match.group("defense_dice"))
+        defense_total = int(opposed_match.group("defense_total"))
+        opposed = {
+            "label": "回避",
+            "dice": defense_dice,
+            "diceValues": dice_pair_from_sum(defense_dice),
+            "bonus": defense_total - defense_dice,
+            "total": defense_total,
+        }
+        return dice_info_from_parts(
+            stripped,
+            label,
+            attack_dice,
+            attack_total,
+            opposed_match.group("result"),
+            target=defense_total,
+            target_label="回避達成値",
+            opposed=opposed,
+        )
+
+    roll_match = re.search(
+        r"出目(?P<dice>\d+)(?P<formula>.*?)=(?P<total>-?\d+)\s*"
+        r"(?:/\s*(?:目標)?(?P<target>-?\d+))?\s*"
+        r"(?:→\s*(?P<result>[^、\s]+))?",
+        stripped,
+    )
+    if roll_match:
+        dice = int(roll_match.group("dice"))
+        total = int(roll_match.group("total"))
+        target = roll_match.group("target")
+        result = roll_match.group("result") or "順位判定"
+        return dice_info_from_parts(
+            stripped,
+            label,
+            dice,
+            total,
+            result,
+            target=int(target) if target is not None else None,
+        )
+
+    fumble_match = re.search(r"出目(?P<dice>2)\s*→\s*(?P<result>[^、\s]+)", stripped)
+    if fumble_match:
+        dice = int(fumble_match.group("dice"))
+        return dice_info_from_parts(
+            stripped,
+            label,
+            dice,
+            dice,
+            fumble_match.group("result"),
+            target=None,
+        )
+
+    return None
+
+
 def log_to_events(
     log_lines: List[str],
     specs: List[sim_engine.TankSpec],
@@ -220,6 +358,7 @@ def log_to_events(
         if placement_match:
             name, intent, outcome, area, drive, stability = placement_match.groups()
             name = name.strip()
+            dice_info = parse_dice_info(line)
             board = {k: dict(v) for k, v in board.items()}
             if name in board:
                 board[name]["area"] = area
@@ -245,6 +384,7 @@ def log_to_events(
                 "title": f"{name}：{intent}",
                 "text": text,
                 "board": board,
+                "diceInfo": dice_info,
             })
             if name in board:
                 board = {k: dict(v) for k, v in board.items()}
@@ -311,6 +451,7 @@ def log_to_events(
 
         if "最終判定" in line:
             actor = actor_from_log(line, names)
+            dice_info = parse_dice_info(line)
             events.append({
                 "type": "final_roll",
                 "round": current_round,
@@ -318,11 +459,13 @@ def log_to_events(
                 "title": "最終順位判定",
                 "text": line.strip(),
                 "board": board,
+                "diceInfo": dice_info,
             })
             continue
 
         actor = actor_from_log(line, names)
         event_type = classify_log_line(line)
+        dice_info = parse_dice_info(line)
         title = "判定ログ"
         if event_type == "hit":
             title = "妨害命中"
@@ -345,6 +488,7 @@ def log_to_events(
             "title": title,
             "text": line.strip(),
             "board": board,
+            "diceInfo": dice_info,
         })
 
         # 次イベントに残り続けないようハイライトを薄める

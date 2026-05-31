@@ -95,6 +95,25 @@ select, input { padding: 10px; border-radius: 8px; border: 1px solid var(--line)
 .ranking-panel h2 { margin: 0 0 12px; color: var(--gold); }
 .ranking-panel ol { margin: 0; padding-left: 28px; font-size: 18px; line-height: 1.9; }
 .ranking-panel li.retired { opacity: .45; text-decoration: line-through; }
+.bottom-layout { display: grid; grid-template-columns: 1fr; gap: 14px; min-height: 146px; }
+.bottom-layout.has-dice { grid-template-columns: minmax(260px, 330px) 1fr; }
+.dice-panel { min-height: 146px; background: rgba(8,12,18,0.84); border: 1px solid rgba(102,168,217,0.45); border-radius: 18px; padding: 14px 16px; box-shadow: 0 -8px 34px rgba(0,0,0,0.22); }
+.dice-panel[hidden] { display: none; }
+.dice-label { color: var(--muted); font-size: 13px; font-weight: 800; letter-spacing: .08em; }
+.dice-numbers { display: grid; grid-template-columns: 48px 18px 48px 18px 1fr; gap: 6px; align-items: center; margin-top: 8px; font-size: 34px; font-weight: 900; }
+.dice-numbers span, .dice-numbers strong { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; border-radius: 8px; background: rgba(255,255,255,0.08); }
+.dice-numbers .dice-operator { background: transparent; color: var(--muted); font-size: 20px; }
+.dice-formula { margin-top: 8px; min-height: 1.35em; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dice-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.dice-meta span { padding: 5px 6px; border-radius: 8px; background: rgba(0,0,0,0.22); text-align: center; }
+.dice-meta strong { color: var(--text); }
+.dice-result { margin-top: 8px; padding: 7px 9px; border-radius: 8px; background: rgba(255,255,255,0.08); color: var(--text); font-weight: 900; text-align: center; }
+.dice-panel--success { border-color: rgba(111,192,143,0.7); }
+.dice-panel--failure { border-color: rgba(213,94,94,0.68); }
+.dice-panel--crit { border-color: rgba(240,207,122,0.95); box-shadow: 0 -8px 34px rgba(0,0,0,0.22), 0 0 28px rgba(240,207,122,0.25); }
+.dice-panel--fumble { border-color: rgba(213,94,94,0.9); box-shadow: 0 -8px 34px rgba(0,0,0,0.22), 0 0 28px rgba(213,94,94,0.25); }
+.dice-panel--crit .dice-result { color: #f0cf7a; }
+.dice-panel--fumble .dice-result { color: #ff9a9a; }
 .cinema-log { min-height: 146px; background: rgba(0,0,0,0.72); border: 1px solid rgba(215,183,106,0.35); border-radius: 22px; padding: 18px 24px; box-shadow: 0 -8px 40px rgba(0,0,0,0.3); transition: border-color .2s ease, box-shadow .2s ease, background .2s ease; }
 .cinema-log--accident { border-color: rgba(213,94,94,0.75); box-shadow: 0 -8px 40px rgba(0,0,0,0.3), 0 0 30px rgba(213,94,94,0.3); }
 .cinema-log--hit { border-color: rgba(213,94,94,0.62); background: rgba(28,8,10,0.78); }
