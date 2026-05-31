@@ -1,4 +1,16 @@
+const TYPEWRITER_SPEED_MS = 28;
+const CINEMA_EMPHASIS_CLASSES = [
+  'cinema-log--accident',
+  'cinema-log--hit',
+  'cinema-log--crit',
+  'cinema-log--goal',
+  'cinema-log--success',
+];
+
 let lastIndex = -1;
+let lastRaceKey = '';
+let typewriterTimer = null;
+let typewriterRunId = 0;
 
 function areaId(area) {
   if (area === '後列') return 'lane-back';
@@ -34,17 +46,94 @@ function tankCard(t) {
   `;
 }
 
+function safeText(value) {
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+function stopTypewriter() {
+  typewriterRunId += 1;
+  if (typewriterTimer !== null) {
+    clearTimeout(typewriterTimer);
+    typewriterTimer = null;
+  }
+}
+
+function typewriterText(element, text) {
+  const fullText = safeText(text);
+  stopTypewriter();
+  element.textContent = '';
+
+  if (!fullText) {
+    element.classList.remove('is-typing');
+    return;
+  }
+
+  const runId = typewriterRunId;
+  let cursor = 0;
+  element.classList.add('is-typing');
+
+  const tick = () => {
+    if (runId !== typewriterRunId) return;
+
+    cursor += 1;
+    element.textContent = fullText.slice(0, cursor);
+
+    if (cursor < fullText.length) {
+      typewriterTimer = setTimeout(tick, TYPEWRITER_SPEED_MS);
+      return;
+    }
+
+    typewriterTimer = null;
+    element.classList.remove('is-typing');
+  };
+
+  tick();
+}
+
+function eventEmphasisClass(event) {
+  const type = safeText(event.type);
+  const title = safeText(event.title);
+  const text = safeText(event.text);
+  const combined = `${title} ${text}`;
+
+  if (type === 'goal') return 'cinema-log--goal';
+  if (type === 'accident' || combined.includes('事故') || combined.includes('大破') || combined.includes('横転')) {
+    return 'cinema-log--accident';
+  }
+  if (type === 'hit' || combined.includes('命中')) return 'cinema-log--hit';
+  if (combined.includes('大成功')) return 'cinema-log--crit';
+  if (type === 'success') return 'cinema-log--success';
+  return '';
+}
+
+function updateCinemaEmphasis(event) {
+  const cinemaLog = document.getElementById('cinemaLog');
+  cinemaLog.classList.remove(...CINEMA_EMPHASIS_CLASSES);
+
+  const emphasisClass = eventEmphasisClass(event);
+  if (emphasisClass) {
+    cinemaLog.classList.add(emphasisClass);
+  }
+}
+
+function raceKey(race) {
+  if (!race) return '';
+  return `${race.rank}:${race.program}:${race.seed}:${(race.events || []).length}`;
+}
+
 function renderDisplay(state) {
   if (!state || !state.ok || !state.race) return;
   const race = state.race;
-  const event = state.event;
+  const event = state.event || {};
   const board = event.board || {};
 
   document.getElementById('raceTitle').textContent = `${race.rank}級 ${race.programLabel}`;
   document.getElementById('roundName').textContent = event.roundName || (event.round ? `第${event.round}R` : '開幕');
   document.getElementById('seedBox').textContent = `seed: ${race.seed} / event ${state.index + 1}/${race.events.length}`;
   document.getElementById('eventTitle').textContent = event.title || '実況';
-  document.getElementById('eventText').textContent = event.text || '';
+  updateCinemaEmphasis(event);
+  typewriterText(document.getElementById('eventText'), event.text);
 
   const lanes = {
     '後列': [],
@@ -68,8 +157,10 @@ function renderDisplay(state) {
 async function poll() {
   try {
     const state = await fetch('/api/state').then(r => r.json());
-    if (state.ok && state.index !== lastIndex) {
+    const currentRaceKey = raceKey(state.race);
+    if (state.ok && (state.index !== lastIndex || currentRaceKey !== lastRaceKey)) {
       lastIndex = state.index;
+      lastRaceKey = currentRaceKey;
       renderDisplay(state);
     }
   } catch (e) {
