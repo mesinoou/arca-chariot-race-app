@@ -358,6 +358,12 @@ def final_board_from_states(states: List[sim_engine.TankState], board: Dict[str,
 
 
 def actor_from_log(line: str, names: List[str]) -> Optional[str]:
+    action_match = re.match(r"\s*([^:：]+)[:：]", line)
+    if action_match:
+        action_actor = action_match.group(1).strip()
+        for n in names:
+            if n == action_actor:
+                return n
     for n in names:
         if n in line:
             return n
@@ -365,6 +371,12 @@ def actor_from_log(line: str, names: List[str]) -> Optional[str]:
 
 
 def target_from_log(line: str, names: List[str], actor: Optional[str]) -> Optional[str]:
+    target_match = re.search(r"→\s*([^\s]+)", line)
+    if target_match:
+        target_text = target_match.group(1).strip()
+        for n in names:
+            if n != actor and n == target_text:
+                return n
     for n in names:
         if n == actor:
             continue
