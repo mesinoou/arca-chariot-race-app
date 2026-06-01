@@ -39,10 +39,24 @@ button:disabled { cursor: not-allowed; filter: grayscale(0.35); opacity: 0.48; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 16px; }
 .panel h2 { margin-top: 0; color: var(--gold); }
 .form-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 14px; }
-label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
+label, .bet-target-group { display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
+.muted-control { opacity: 0.55; }
 select, input { padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: #111522; color: var(--text); }
 .actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
 .auto-status { margin-top: 10px; color: var(--muted); font-size: 14px; }
+.odds-controls, .bet-panel { display: grid; grid-template-columns: minmax(180px, 240px) auto 1fr; gap: 12px; align-items: end; margin-top: 8px; }
+.odds-summary { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+.odds-chip { padding: 8px 10px; border-radius: 8px; background: rgba(215,183,106,0.14); border: 1px solid rgba(215,183,106,0.24); }
+.odds-table { overflow: auto; margin-top: 8px; }
+.odds-table table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.odds-table th, .odds-table td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.odds-table th { color: var(--gold); font-weight: 800; background: rgba(255,255,255,0.04); }
+.bet-panel { grid-template-columns: minmax(150px, 180px) minmax(260px, 1fr) minmax(120px, 160px) auto; margin-top: 14px; }
+.bet-targets { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; }
+.bet-target-select { min-width: 0; font-size: 12px; }
+.bet-target-select select { width: 100%; }
+.bet-odds-preview { margin-top: 10px; color: var(--gold); font-weight: 800; }
+.bet-result { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: rgba(0,0,0,0.22); color: var(--text); line-height: 1.6; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .current-event { white-space: pre-wrap; line-height: 1.6; }
 .tank-row, .event-row { padding: 8px 10px; border-bottom: 1px solid var(--line); }
@@ -116,6 +130,7 @@ select, input { padding: 10px; border-radius: 8px; border: 1px solid var(--line)
 .tank-style { color: var(--gold); font-size: 12px; margin-left: 6px; }
 .tank-stats { margin-top: 8px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; font-size: 12px; color: var(--muted); }
 .stat-pill { background: rgba(0,0,0,0.22); padding: 4px 5px; border-radius: 8px; text-align: center; }
+.tank-odds { margin-top: 6px; color: var(--gold); font-size: 11px; font-weight: 800; }
 .ranking-panel { background: rgba(10,12,18,0.75); border: 1px solid var(--line); border-radius: 22px; padding: 18px; overflow: hidden; }
 .ranking-panel h2 { margin: 0 0 12px; color: var(--gold); }
 .ranking-panel ol { margin: 0; padding-left: 28px; font-size: 18px; line-height: 1.9; }
