@@ -22,6 +22,7 @@ let typewriterRunId = 0;
 let diceRollTimer = null;
 let diceRollStopTimer = null;
 let diceRunId = 0;
+const iconNodes = new Map();
 
 function areaId(area) {
   if (area === '後列') return 'lane-back';
@@ -55,6 +56,28 @@ function tankCard(t) {
       </div>
     </div>
   `;
+}
+
+function styleClass(style) {
+  const styleMap = {
+    '逃げ': 'runner',
+    '追込': 'chaser',
+    '万能': 'allrounder',
+    '重戦車': 'heavy',
+    '射撃': 'shooter',
+    '荒くれ': 'wild',
+  };
+  return styleMap[style] || 'allrounder';
+}
+
+function areaTrackX(area) {
+  if (area === '後列') return 16;
+  if (area === '中列') return 48;
+  return 80;
+}
+
+function iconInitials(name) {
+  return safeText(name).slice(0, 2);
 }
 
 function safeText(value) {
@@ -247,6 +270,65 @@ function raceKey(race) {
   return `${race.rank}:${race.program}:${race.seed}:${(race.events || []).length}`;
 }
 
+function ensureIconNode(tank) {
+  const track = document.getElementById('iconTrack');
+  let node = iconNodes.get(tank.name);
+  if (!node) {
+    node = document.createElement('div');
+    node.className = 'race-icon';
+    node.dataset.name = tank.name;
+    node.innerHTML = `
+      <span class="race-icon-mark">${iconInitials(tank.name)}</span>
+      <span class="race-icon-name"></span>
+      <span class="race-icon-stats"></span>
+    `;
+    iconNodes.set(tank.name, node);
+    track.appendChild(node);
+  }
+  return node;
+}
+
+function updateIconTrack(board, event) {
+  const tanks = boardRanking(board);
+  const names = new Set(tanks.map(t => t.name));
+  const actor = event.actor || '';
+  const target = event.target || '';
+  const focusParts = [];
+
+  if (actor) focusParts.push(`注目: ${actor}`);
+  if (target) focusParts.push(`標的: ${target}`);
+  document.getElementById('iconTrackFocus').textContent = focusParts.join(' / ') || '隊列表示';
+
+  for (const [name, node] of iconNodes.entries()) {
+    if (!names.has(name)) {
+      node.remove();
+      iconNodes.delete(name);
+    }
+  }
+
+  tanks.forEach((tank, index) => {
+    const node = ensureIconNode(tank);
+    const baseX = areaTrackX(tank.retired ? '後列' : tank.area);
+    const rankPush = Math.max(0, 5 - index) * 1.5;
+    const x = Math.min(88, baseX + rankPush);
+    const y = 18 + index * 12;
+    const classes = [
+      'race-icon',
+      `race-icon--${styleClass(tank.style)}`,
+      tank.retired ? 'is-retired' : '',
+      tank.name === actor ? 'is-actor' : '',
+      tank.name === target ? 'is-target' : '',
+      tank.highlight === 'move' || event.type === 'move' && tank.name === actor ? 'is-moving' : '',
+    ].filter(Boolean);
+
+    node.className = classes.join(' ');
+    node.style.left = `${x}%`;
+    node.style.top = `${y}px`;
+    node.querySelector('.race-icon-name').textContent = tank.name;
+    node.querySelector('.race-icon-stats').textContent = `${tank.area} 先${tank.lead || 0} HP${tank.hp}`;
+  });
+}
+
 function renderDisplay(state) {
   if (!state || !state.ok || !state.race) return;
   const race = state.race;
@@ -263,6 +345,7 @@ function renderDisplay(state) {
   updateCinemaEmphasis(event);
   rollDicePanel(event.diceInfo);
   typewriterText(document.getElementById('eventText'), event.text);
+  updateIconTrack(board, event);
 
   const lanes = {
     '後列': [],

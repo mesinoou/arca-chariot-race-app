@@ -165,6 +165,15 @@ def actor_from_log(line: str, names: List[str]) -> Optional[str]:
     return None
 
 
+def target_from_log(line: str, names: List[str], actor: Optional[str]) -> Optional[str]:
+    for n in names:
+        if n == actor:
+            continue
+        if re.search(rf"→\s*{re.escape(n)}(?:\s|$)", line):
+            return n
+    return None
+
+
 def classify_log_line(line: str) -> str:
     if "事故判定" in line or "大破" in line or "横転" in line or "激突" in line:
         return "accident"
@@ -456,6 +465,7 @@ def log_to_events(
                 "type": "final_roll",
                 "round": current_round,
                 "actor": actor,
+                "target": None,
                 "title": "最終順位判定",
                 "text": line.strip(),
                 "board": board,
@@ -464,6 +474,7 @@ def log_to_events(
             continue
 
         actor = actor_from_log(line, names)
+        target = target_from_log(line, names, actor)
         event_type = classify_log_line(line)
         dice_info = parse_dice_info(line)
         title = "判定ログ"
@@ -485,6 +496,7 @@ def log_to_events(
             "type": event_type,
             "round": current_round,
             "actor": actor,
+            "target": target,
             "title": title,
             "text": line.strip(),
             "board": board,
