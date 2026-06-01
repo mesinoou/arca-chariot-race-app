@@ -22,6 +22,7 @@ let typewriterRunId = 0;
 let diceRollTimer = null;
 let diceRollStopTimer = null;
 let diceRunId = 0;
+let displayOdds = null;
 const iconNodes = new Map();
 
 function areaId(area) {
@@ -45,6 +46,7 @@ function tankCard(t) {
   const hpPct = Math.max(0, Math.min(100, Math.round((t.hp / t.maxHp) * 100)));
   const retiredClass = t.retired ? 'retired' : '';
   const highlight = t.highlight || '';
+  const odds = displayOdds?.tanks?.find(row => row.name === t.name);
   return `
     <div class="tank-card ${highlight} ${retiredClass}" data-name="${t.name}">
       <div><span class="tank-name">${t.name}</span><span class="tank-style">${t.style}</span></div>
@@ -54,6 +56,7 @@ function tankCard(t) {
         <div class="stat-pill">先 ${t.lead}</div>
         <div class="stat-pill">駆 ${t.drive}</div>
       </div>
+      ${odds ? `<div class="tank-odds">単 ${Number(odds.winOdds).toFixed(1)} / 複 ${Number(odds.placeOdds).toFixed(1)}</div>` : ''}
     </div>
   `;
 }
@@ -337,6 +340,7 @@ function renderDisplay(state) {
   const eventIndex = state.current_index ?? state.index ?? 0;
   const eventNumber = state.current_event_number ?? (eventIndex + 1);
   const totalEvents = state.total_events ?? race.events.length;
+  displayOdds = state.odds || race.odds || null;
 
   document.getElementById('raceTitle').textContent = `${race.rank}級 ${race.programLabel}`;
   document.getElementById('roundName').textContent = event.roundName || (event.round ? `第${event.round}R` : '開幕');

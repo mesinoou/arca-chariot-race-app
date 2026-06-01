@@ -66,6 +66,20 @@ PROGRAM_LABELS = {
 STATE: Dict[str, Any] = {
     "race": None,
     "index": 0,
+    "odds": None,
+}
+
+DEFAULT_ODDS_SIMULATIONS = 1000
+MIN_ODDS_SIMULATIONS = 100
+MAX_ODDS_SIMULATIONS = 10000
+MIN_ODDS = 1.1
+MAX_ODDS = 99.9
+BET_PAYOUT_POOL = 0.9
+
+COMBO_BET_TARGET_COUNTS = {
+    "exacta": 2,
+    "quinella": 2,
+    "trifecta": 3,
 }
 
 
@@ -81,6 +95,7 @@ def race_response_payload(race: Dict[str, Any], index: int) -> Dict[str, Any]:
         "total_events": total_events,
         "is_last_event": safe_index >= total_events - 1,
         "event": race["events"][safe_index],
+        "odds": race.get("odds"),
     }
 
 
@@ -98,6 +113,190 @@ def tank_to_public_dict(t: sim_engine.TankSpec) -> Dict[str, Any]:
         "drive": t.drive,
         "ammo": t.ammo,
         "hp": t.hp,
+    }
+
+
+def odds_value(payout_pool: float, rate: float) -> float:
+    if rate <= 0:
+        return MAX_ODDS
+    return round(min(MAX_ODDS, max(MIN_ODDS, payout_pool / rate)), 1)
+
+
+def clamp_simulations(value: Any) -> int:
+    try:
+        simulations = int(value)
+    except (TypeError, ValueError):
+        simulations = DEFAULT_ODDS_SIMULATIONS
+    return min(MAX_ODDS_SIMULATIONS, max(MIN_ODDS_SIMULATIONS, simulations))
+
+
+def combo_key(names: List[str], unordered: bool = False) -> str:
+    selected = sorted(names) if unordered else names
+    return "|".join(selected)
+
+
+def combo_odds_from_counts(counts: Dict[str, int], simulations: int) -> Dict[str, float]:
+    return {
+        key: odds_value(BET_PAYOUT_POOL, count / max(1, simulations))
+        for key, count in counts.items()
+    }
+
+
+def calculate_odds(rank: str, program: str, simulations: int, seed: Optional[int] = None) -> Dict[str, Any]:
+    sim_seed = seed if seed is not None else random.randint(1, 999999999)
+    rng = random.Random(sim_seed)
+    specs = sim_engine.make_program(rank, program)
+    stats: Dict[str, Dict[str, int]] = {
+        s.name: {"starts": 0, "wins": 0, "top3": 0, "retirements": 0}
+        for s in specs
+    }
+    combo_counts = {
+        "exacta": {},
+        "quinella": {},
+        "trifecta": {},
+        "perfect": {},
+    }
+
+    for _ in range(simulations):
+        result = sim_engine.race_once(specs, rng, log_enabled=False)
+        final_names = [t.name for t in result.order]
+        combo_keys = {
+            "exacta": combo_key(final_names[:2]),
+            "quinella": combo_key(final_names[:2], unordered=True),
+            "trifecta": combo_key(final_names[:3]),
+            "perfect": combo_key(final_names),
+        }
+        for bet_type, key in combo_keys.items():
+            combo_counts[bet_type][key] = combo_counts[bet_type].get(key, 0) + 1
+
+        rank_by_name = {t.name: idx + 1 for idx, t in enumerate(result.order)}
+        for state in result.states:
+            tank_stats = stats[state.name]
+            tank_stats["starts"] += 1
+            position = rank_by_name[state.name]
+            if position == 1:
+                tank_stats["wins"] += 1
+            if position <= 3:
+                tank_stats["top3"] += 1
+            if state.retired:
+                tank_stats["retirements"] += 1
+
+    tank_rows: List[Dict[str, Any]] = []
+    for spec in specs:
+        tank_stats = stats[spec.name]
+        starts = max(1, tank_stats["starts"])
+        win_rate = tank_stats["wins"] / starts
+        top3_rate = tank_stats["top3"] / starts
+        retirement_rate = tank_stats["retirements"] / starts
+        tank_rows.append({
+            "name": spec.name,
+            "style": spec.style,
+            "winRate": win_rate,
+            "top3Rate": top3_rate,
+            "retirementRate": retirement_rate,
+            "winOdds": odds_value(BET_PAYOUT_POOL, win_rate),
+            "placeOdds": odds_value(BET_PAYOUT_POOL, top3_rate),
+        })
+
+    return {
+        "rank": rank,
+        "program": program,
+        "programLabel": PROGRAM_LABELS.get(program, program),
+        "simulations": simulations,
+        "seed": sim_seed,
+        "tanks": tank_rows,
+        "comboOdds": {
+            bet_type: combo_odds_from_counts(counts, simulations)
+            for bet_type, counts in combo_counts.items()
+        },
+    }
+
+
+def normalize_bet_targets(bet: Dict[str, Any]) -> List[str]:
+    raw_targets = bet.get("targets")
+    if raw_targets is None:
+        raw_targets = bet.get("target")
+
+    if isinstance(raw_targets, list):
+        return [str(t) for t in raw_targets if str(t)]
+    if isinstance(raw_targets, str):
+        return [t for t in raw_targets.split("|") if t]
+    return []
+
+
+def expected_target_count(bet_type: str, total_tanks: int) -> Optional[int]:
+    if bet_type in ("win", "place"):
+        return 1
+    if bet_type == "perfect":
+        return total_tanks
+    return COMBO_BET_TARGET_COUNTS.get(bet_type)
+
+
+def valid_bet_targets(bet_type: str, targets: List[str], final_order: List[str]) -> bool:
+    expected_count = expected_target_count(bet_type, len(final_order))
+    if expected_count is None:
+        return False
+    if len(targets) != expected_count:
+        return False
+    if len(set(targets)) != len(targets):
+        return False
+    return all(target in final_order for target in targets)
+
+
+def odds_for_bet(odds: Dict[str, Any], bet_type: str, targets: List[str]) -> Optional[float]:
+    if bet_type == "win":
+        for row in odds.get("tanks", []):
+            if targets and row.get("name") == targets[0]:
+                return row.get("winOdds")
+    if bet_type == "place":
+        for row in odds.get("tanks", []):
+            if targets and row.get("name") == targets[0]:
+                return row.get("placeOdds")
+    if bet_type in ("exacta", "trifecta", "perfect"):
+        return odds.get("comboOdds", {}).get(bet_type, {}).get(combo_key(targets), MAX_ODDS)
+    if bet_type == "quinella":
+        return odds.get("comboOdds", {}).get(bet_type, {}).get(combo_key(targets, unordered=True), MAX_ODDS)
+    return None
+
+
+def evaluate_bet_result(race: Dict[str, Any], odds: Dict[str, Any], bet: Dict[str, Any]) -> Dict[str, Any]:
+    bet_type = bet.get("type", "win")
+    targets = normalize_bet_targets(bet)
+    try:
+        stake = max(0, int(bet.get("stake", 0)))
+    except (TypeError, ValueError):
+        stake = 0
+
+    final_order = race.get("finalOrder", [])
+    valid = valid_bet_targets(bet_type, targets, final_order)
+    hit = False
+    if valid and bet_type == "win":
+        hit = bool(final_order) and targets[0] == final_order[0]
+    elif valid and bet_type == "place":
+        hit = targets[0] in final_order[:3]
+    elif valid and bet_type == "exacta":
+        hit = targets == final_order[:2]
+    elif valid and bet_type == "quinella":
+        hit = set(targets) == set(final_order[:2])
+    elif valid and bet_type == "trifecta":
+        hit = targets == final_order[:3]
+    elif valid and bet_type == "perfect":
+        hit = targets == final_order
+
+    odds_value_for_bet = odds_for_bet(odds, bet_type, targets)
+    if odds_value_for_bet is None:
+        odds_value_for_bet = 0
+    payout = int(round(stake * odds_value_for_bet)) if hit else 0
+    return {
+        "type": bet_type,
+        "targets": targets,
+        "stake": stake,
+        "odds": odds_value_for_bet,
+        "valid": valid,
+        "hit": hit,
+        "payout": payout,
+        "profit": payout - stake,
+        "finalOrder": final_order,
     }
 
 
@@ -527,8 +726,7 @@ def create_race(rank: str, program: str, seed: int) -> Dict[str, Any]:
     specs = sim_engine.make_program(rank, program)
     result = sim_engine.race_once(specs, rng, log_enabled=True)
     events = log_to_events(result.log, specs, result, rank, program, seed)
-
-    return {
+    race = {
         "rank": rank,
         "program": program,
         "programLabel": PROGRAM_LABELS.get(program, program),
@@ -538,6 +736,10 @@ def create_race(rank: str, program: str, seed: int) -> Dict[str, Any]:
         "finalOrder": [t.name for t in result.order],
         "accidentCount": result.accident_count,
     }
+    current_odds = STATE.get("odds")
+    if current_odds and current_odds.get("rank") == rank and current_odds.get("program") == program:
+        race["odds"] = current_odds
+    return race
 
 
 @app.route("/")
@@ -570,6 +772,40 @@ def api_new_race():
     STATE["race"] = race
     STATE["index"] = 0
     return jsonify(race_response_payload(race, 0))
+
+
+@app.post("/api/calculate_odds")
+def api_calculate_odds():
+    payload = request.get_json(force=True) or {}
+    rank = payload.get("rank", "A")
+    program = payload.get("program", "standard")
+    simulations = clamp_simulations(payload.get("simulations", DEFAULT_ODDS_SIMULATIONS))
+    seed_raw = payload.get("seed")
+    seed = int(seed_raw) if seed_raw not in (None, "") else None
+
+    odds = calculate_odds(rank, program, simulations, seed)
+    STATE["odds"] = odds
+    race = STATE.get("race")
+    if race and race.get("rank") == rank and race.get("program") == program:
+        race["odds"] = odds
+    return jsonify({"ok": True, "odds": odds})
+
+
+@app.post("/api/evaluate_bet")
+def api_evaluate_bet():
+    payload = request.get_json(force=True) or {}
+    race = STATE.get("race")
+    if race is None:
+        return jsonify({"ok": False, "error": "race is not initialized"}), 400
+    odds = race.get("odds") or STATE.get("odds")
+    if odds is None:
+        return jsonify({"ok": False, "error": "odds are not calculated"}), 400
+    if odds.get("rank") != race.get("rank") or odds.get("program") != race.get("program"):
+        return jsonify({"ok": False, "error": "odds do not match current race"}), 400
+    if STATE.get("index", 0) < len(race["events"]) - 1:
+        return jsonify({"ok": False, "error": "race is not finished"}), 400
+    result = evaluate_bet_result(race, odds, payload.get("bet", {}))
+    return jsonify({"ok": True, "result": result})
 
 
 @app.post("/api/next")

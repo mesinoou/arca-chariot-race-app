@@ -52,6 +52,42 @@
     <div id="currentEvent" class="current-event">まだレースが生成されていません。</div>
   </section>
 
+  <section class="panel">
+    <h2>オッズ・払戻</h2>
+    <div class="odds-controls">
+      <label>事前シミュレーション回数
+        <input id="oddsSimulations" type="number" min="100" max="10000" step="100" value="1000">
+      </label>
+      <button id="calculateOdds">オッズ計算</button>
+      <div id="oddsStatus" class="auto-status">未計算</div>
+    </div>
+    <div id="oddsSummary" class="odds-summary"></div>
+    <div id="oddsTable" class="odds-table"></div>
+
+    <div class="bet-panel">
+      <label>賭け種別
+        <select id="betType">
+          <option value="win">単勝</option>
+          <option value="place">複勝</option>
+          <option value="exacta">連単</option>
+          <option value="quinella">連複</option>
+          <option value="trifecta">三連単</option>
+          <option value="perfect">パーフェクト</option>
+        </select>
+      </label>
+      <div id="betTargetLabel" class="bet-target-group">
+        <span>対象戦車</span>
+        <div id="betTargets" class="bet-targets"></div>
+      </div>
+      <label>掛け金
+        <input id="betStake" type="number" min="0" step="1" value="100">
+      </label>
+      <button id="evaluateBet">払戻計算</button>
+    </div>
+    <div id="betOddsPreview" class="bet-odds-preview">オッズ計算後に選択中のオッズを表示します。</div>
+    <div id="betResult" class="bet-result">レース終了後に払戻計算できます。</div>
+  </section>
+
   <section class="panel split">
     <div>
       <h2>出走表</h2>
