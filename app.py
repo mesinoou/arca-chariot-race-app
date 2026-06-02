@@ -27,41 +27,8 @@ import sim_engine
 
 app = Flask(__name__)
 
-ROUND_INFO = {
-    1: {
-        "name": "発走直線",
-        "text": "鉄輪の鐘が鳴り、六台の戦車が一斉に飛び出す。最初に前へ出るのはどの車体か。",
-    },
-    2: {
-        "name": "第一カーブ",
-        "text": "石畳の急カーブへ戦車が雪崩れ込む。内側を刺す者、外から速度を保つ者、隊列が大きく揺れる。",
-    },
-    3: {
-        "name": "混戦直線",
-        "text": "直線に戻った瞬間、砲声と車輪の軋みが混ざる。ここから妨害が激しくなる。",
-    },
-    4: {
-        "name": "障害帯",
-        "text": "瓦礫、段差、可動柵。無理に速度を出せば、車体ごと跳ね飛ばされる危険な区間だ。",
-    },
-    5: {
-        "name": "第二カーブ・鉄輪橋",
-        "text": "鉄輪橋へ向かう最後の大カーブ。ここで崩れれば、最終直線には届かない。",
-    },
-    6: {
-        "name": "最終直線",
-        "text": "観客席が揺れる。ゴールラインは目前。残った駆動力と先行点が最後の差になる。",
-    },
-}
-
-PROGRAM_LABELS = {
-    "standard": "標準公式戦",
-    "speed": "高速戦",
-    "technique": "技巧戦",
-    "heavy": "重装戦",
-    "shooting": "射撃戦",
-    "chaos": "荒れ場戦",
-}
+ROUND_INFO = sim_engine.round_info()
+PROGRAM_LABELS = sim_engine.program_labels()
 
 STATE: Dict[str, Any] = {
     "race": None,
@@ -81,6 +48,10 @@ COMBO_BET_TARGET_COUNTS = {
     "quinella": 2,
     "trifecta": 3,
 }
+
+
+def audience_template(key: str, default: str = "", **values: Any) -> str:
+    return sim_engine.commentary_text("audience", key, default, **values)
 
 
 def race_response_payload(race: Dict[str, Any], index: int) -> Dict[str, Any]:
@@ -573,30 +544,40 @@ def audience_text_for_event(event: Dict[str, Any]) -> str:
     if event_type in ("title", "placement_start", "round_start", "placement", "move"):
         return text
     if event_type == "ranking_update":
-        return "隊列が更新された。"
+        return audience_template("ranking_update", "隊列が更新された。")
     if event_type == "goal":
         order = event.get("order") or []
         if order:
-            return "ゴール！ " + "、".join(f"{i + 1}着 {name}" for i, name in enumerate(order[:3]))
-        return "ゴール！ 最終順位が確定した。"
+            order_top3 = "、".join(f"{i + 1}着 {name}" for i, name in enumerate(order[:3]))
+            return audience_template("goal_with_order", "ゴール！ {order_top3}", order_top3=order_top3)
+        return audience_template("goal_default", "ゴール！ 最終順位が確定した。")
     if event_type == "final_roll":
-        return f"{event_subject(event)}、最後の伸び脚を競る。"
+        return audience_template("final_roll", "{subject}、最後の伸び脚を競る。", subject=event_subject(event))
     if event_type == "hit" and actor and target:
-        return f"{actor}の妨害が{target}を捕らえた！"
+        return audience_template("hit_with_target", "{actor}の妨害が{target}を捕らえた！", actor=actor, target=target)
     if event_type == "hit":
-        return f"{event_subject(event)}に衝撃が走る！"
+        return audience_template("hit", "{subject}に衝撃が走る！", subject=event_subject(event))
     if event_type == "accident":
         if "大破" in text or "リタイア" in text:
-            return f"{event_subject(event)}、大きく崩れてリタイア寸前！"
-        return "事故発生！ 車体が大きく跳ねる！"
+            return audience_template(
+                "accident_retire",
+                "{subject}、大きく崩れてリタイア寸前！",
+                subject=event_subject(event),
+            )
+        return audience_template("accident", "事故発生！ 車体が大きく跳ねる！")
     if event_type == "success":
         if "大成功" in text or dice_info.get("resultClass") == "crit":
-            return f"{event_subject(event)}、{label}で大成功！"
-        return f"{event_subject(event)}、{label}に成功！"
+            return audience_template(
+                "success_crit",
+                "{subject}、{label}で大成功！",
+                subject=event_subject(event),
+                label=label,
+            )
+        return audience_template("success", "{subject}、{label}に成功！", subject=event_subject(event), label=label)
     if event_type == "failure":
-        return f"{event_subject(event)}、{label}は伸びきらない！"
+        return audience_template("failure", "{subject}、{label}は伸びきらない！", subject=event_subject(event), label=label)
     if event_type == "log" and ("奇跡" in text or "復帰" in text):
-        return "土煙の中から戦車が復帰する！"
+        return audience_template("miracle", "土煙の中から戦車が復帰する！")
     return text
 
 
@@ -720,7 +701,10 @@ def log_to_events(
     events.append({
         "type": "title",
         "title": f"{rank}級 {PROGRAM_LABELS.get(program, program)}",
-        "text": "グランド・サーキット・アルカ、出走準備完了。鉄輪会の旗が振り上げられる。",
+        "text": audience_template(
+            "title",
+            "グランド・サーキット・アルカ、出走準備完了。鉄輪会の旗が振り上げられる。",
+        ),
         "board": board,
     })
 
@@ -736,7 +720,10 @@ def log_to_events(
                 "round": 0,
                 "roundName": "配置決め",
                 "title": "配置決めフェーズ",
-                "text": "各車が発走直後の位置取りに入る。前へ割り込むか、混戦に構えるか、後方から脚を溜めるか。",
+                "text": audience_template(
+                    "placement_start",
+                    "各車が発走直後の位置取りに入る。前へ割り込むか、混戦に構えるか、後方から脚を溜めるか。",
+                ),
                 "board": board,
             })
             continue
@@ -757,15 +744,35 @@ def log_to_events(
                 board[name]["highlight"] = "move" if area == "前列" else ("success" if area == "後列" else "")
             if intent == "前列狙い":
                 if outcome == "大成功":
-                    text = f"{name}が鮮やかに前列を奪取する。駆動力を温存したまま、先頭集団へ滑り込んだ。"
+                    text = audience_template(
+                        "placement_front_crit",
+                        "{name}が鮮やかに前列を奪取する。駆動力を温存したまま、先頭集団へ滑り込んだ。",
+                        name=name,
+                    )
                 elif outcome == "成功":
-                    text = f"{name}が強引に前列へ割り込む。駆動力を使ったが、発走直後の好位置を取った。"
+                    text = audience_template(
+                        "placement_front_success",
+                        "{name}が強引に前列へ割り込む。駆動力を使ったが、発走直後の好位置を取った。",
+                        name=name,
+                    )
                 else:
-                    text = f"{name}は前列を狙うが割り込みきれない。駆動力と安定を削り、中列からの再加速を迫られる。"
+                    text = audience_template(
+                        "placement_front_failure",
+                        "{name}は前列を狙うが割り込みきれない。駆動力と安定を削り、中列からの再加速を迫られる。",
+                        name=name,
+                    )
             elif intent == "後列配置":
-                text = f"{name}は後方に控える。序盤の位置を捨て、温存した駆動力で後半に賭ける構えだ。"
+                text = audience_template(
+                    "placement_back",
+                    "{name}は後方に控える。序盤の位置を捨て、温存した駆動力で後半に賭ける構えだ。",
+                    name=name,
+                )
             else:
-                text = f"{name}は中列に構える。混戦の中央で、出方をうかがう。"
+                text = audience_template(
+                    "placement_middle",
+                    "{name}は中列に構える。混戦の中央で、出方をうかがう。",
+                    name=name,
+                )
             events.append({
                 "type": "placement",
                 "round": 0,
@@ -823,7 +830,13 @@ def log_to_events(
                 "from": src,
                 "to": dst,
                 "title": f"{name}、{dst}へ！",
-                "text": f"{name}が隊列を押し上げ、{src}から{dst}へ躍り出る。",
+                "text": audience_template(
+                    "move",
+                    "{name}が隊列を押し上げ、{src}から{dst}へ躍り出る。",
+                    name=name,
+                    src=src,
+                    dst=dst,
+                ),
                 "gm_text": line.strip(),
                 "board": board,
             })
@@ -911,8 +924,9 @@ def log_to_events(
 
 def create_race(rank: str, program: str, seed: int) -> Dict[str, Any]:
     rng = random.Random(seed)
+    commentary_rng = random.Random(f"{seed}:commentary")
     specs = sim_engine.make_program(rank, program)
-    result = sim_engine.race_once(specs, rng, log_enabled=True)
+    result = sim_engine.race_once(specs, rng, log_enabled=True, commentary_rng=commentary_rng)
     events = log_to_events(result.log, specs, result, rank, program, seed)
     race = {
         "rank": rank,

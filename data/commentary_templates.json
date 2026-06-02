@@ -1,0 +1,57 @@
+{
+  "round_info": {
+    "1": {
+      "name": "発走直線",
+      "text": "鉄輪の鐘が鳴り、六台の戦車が一斉に飛び出す。最初に前へ出るのはどの車体か。"
+    },
+    "2": {
+      "name": "第一カーブ",
+      "text": "石畳の急カーブへ戦車が雪崩れ込む。内側を刺す者、外から速度を保つ者、隊列が大きく揺れる。"
+    },
+    "3": {
+      "name": "混戦直線",
+      "text": "直線に戻った瞬間、砲声と車輪の軋みが混ざる。ここから妨害が激しくなる。"
+    },
+    "4": {
+      "name": "障害帯",
+      "text": "瓦礫、段差、可動柵。無理に速度を出せば、車体ごと跳ね飛ばされる危険な区間だ。"
+    },
+    "5": {
+      "name": "第二カーブ・鉄輪橋",
+      "text": "鉄輪橋へ向かう最後の大カーブ。ここで崩れれば、最終直線には届かない。"
+    },
+    "6": {
+      "name": "最終直線",
+      "text": "観客席が揺れる。ゴールラインは目前。残った駆動力と先行点が最後の差になる。"
+    }
+  },
+  "audience": {
+    "title": "グランド・サーキット・アルカ、出走準備完了。鉄輪会の旗が振り上げられる。",
+    "placement_start": "各車が発走直後の位置取りに入る。前へ割り込むか、混戦に構えるか、後方から脚を溜めるか。",
+    "placement_front_crit": "{name}が鮮やかに前列を奪取する。駆動力を温存したまま、先頭集団へ滑り込んだ。",
+    "placement_front_success": "{name}が強引に前列へ割り込む。駆動力を使ったが、発走直後の好位置を取った。",
+    "placement_front_failure": "{name}は前列を狙うが割り込みきれない。駆動力と安定を削り、中列からの再加速を迫られる。",
+    "placement_back": "{name}は後方に控える。序盤の位置を捨て、温存した駆動力で後半に賭ける構えだ。",
+    "placement_middle": "{name}は中列に構える。混戦の中央で、出方をうかがう。",
+    "ranking_update": "隊列が更新された。",
+    "move": "{name}が隊列を押し上げ、{src}から{dst}へ躍り出る。",
+    "goal_with_order": "ゴール！ {order_top3}",
+    "goal_default": "ゴール！ 最終順位が確定した。",
+    "final_roll": "{subject}、最後の伸び脚を競る。",
+    "hit_with_target": "{actor}の妨害が{target}を捕らえた！",
+    "hit": "{subject}に衝撃が走る！",
+    "accident_retire": "{subject}、大きく崩れてリタイア寸前！",
+    "accident": "事故発生！ 車体が大きく跳ねる！",
+    "success_crit": "{subject}、{label}で大成功！",
+    "success": "{subject}、{label}に成功！",
+    "failure": "{subject}、{label}は伸びきらない！",
+    "miracle": "土煙の中から戦車が復帰する！"
+  },
+  "sim_log": {
+    "placement_phase_start": "\n=== 配置決めフェーズ ===",
+    "round_start": "\n=== R{round_no} ===",
+    "final_phase_start": "\n=== 最終順位判定 ===",
+    "ranking_prefix": "  暫定順位: ",
+    "final_order_prefix": "  確定順位: "
+  }
+}

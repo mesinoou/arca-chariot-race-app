@@ -1,0 +1,70 @@
+{
+  "programs": {
+    "standard": {
+      "label": "標準公式戦",
+      "entries": [
+        {"style": "逃げ", "index": 0},
+        {"style": "追込", "index": 0},
+        {"style": "万能", "index": 0},
+        {"style": "重戦車", "index": 0},
+        {"style": "射撃", "index": 0},
+        {"style": "荒くれ", "index": 0}
+      ]
+    },
+    "speed": {
+      "label": "高速戦",
+      "entries": [
+        {"style": "逃げ", "index": 0},
+        {"style": "逃げ", "index": 1},
+        {"style": "追込", "index": 0},
+        {"style": "追込", "index": 1},
+        {"style": "万能", "index": 0},
+        {"style": "万能", "index": 1}
+      ]
+    },
+    "technique": {
+      "label": "技巧戦",
+      "entries": [
+        {"style": "追込", "index": 0},
+        {"style": "追込", "index": 1},
+        {"style": "追込", "index": 2},
+        {"style": "万能", "index": 0},
+        {"style": "万能", "index": 1},
+        {"style": "射撃", "index": 0}
+      ]
+    },
+    "heavy": {
+      "label": "重装戦",
+      "entries": [
+        {"style": "重戦車", "index": 0},
+        {"style": "重戦車", "index": 1},
+        {"style": "重戦車", "index": 2},
+        {"style": "荒くれ", "index": 2},
+        {"style": "万能", "index": 2},
+        {"style": "逃げ", "index": 0}
+      ]
+    },
+    "shooting": {
+      "label": "射撃戦",
+      "entries": [
+        {"style": "射撃", "index": 0},
+        {"style": "射撃", "index": 1},
+        {"style": "射撃", "index": 2},
+        {"style": "重戦車", "index": 0},
+        {"style": "万能", "index": 1},
+        {"style": "追込", "index": 0}
+      ]
+    },
+    "chaos": {
+      "label": "荒れ場戦",
+      "entries": [
+        {"style": "荒くれ", "index": 0},
+        {"style": "荒くれ", "index": 1},
+        {"style": "荒くれ", "index": 2},
+        {"style": "重戦車", "index": 0},
+        {"style": "射撃", "index": 0},
+        {"style": "逃げ", "index": 1}
+      ]
+    }
+  }
+}

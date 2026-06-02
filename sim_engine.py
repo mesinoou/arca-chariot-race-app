@@ -23,8 +23,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 import argparse
+import json
 import math
 import random
 import statistics
@@ -244,200 +246,211 @@ def tank_grade_points(t: TankSpec) -> int:
 
 
 # ============================================================
-# サンプル戦車データ
+# 外部データ
 # ============================================================
 
-def make_rank_tanks(rank: str) -> Dict[str, TankSpec]:
+DATA_DIR = Path(__file__).resolve().parent / "data"
+_DATA_CACHE: Dict[str, Tuple[float, Any]] = {}
+TANK_FIELDS = [
+    "name",
+    "style",
+    "rank",
+    "mobility",
+    "handling",
+    "armor",
+    "firepower",
+    "stability",
+    "drive",
+    "ammo",
+    "hp",
+    "ai",
+]
+
+
+def load_json_data(filename: str) -> Any:
+    """data/*.json を読み込む。失敗時は調整しやすい例外に整える。"""
+    path = DATA_DIR / filename
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"JSONデータファイルが見つかりません: {path}") from exc
+
+    cached = _DATA_CACHE.get(filename)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"JSONデータファイルの形式が不正です: {path} "
+            f"line {exc.lineno}, column {exc.colno}: {exc.msg}"
+        ) from exc
+
+    _DATA_CACHE[filename] = (mtime, data)
+    return data
+
+
+def tank_data() -> Dict[str, Any]:
+    data = load_json_data("tanks.json")
+    if not isinstance(data, dict) or not isinstance(data.get("ranks"), dict):
+        raise RuntimeError("tanks.json は ranks オブジェクトを含む必要があります")
+    return data
+
+
+def program_data() -> Dict[str, Any]:
+    data = load_json_data("programs.json")
+    if not isinstance(data, dict) or not isinstance(data.get("programs"), dict):
+        raise RuntimeError("programs.json は programs オブジェクトを含む必要があります")
+    return data
+
+
+def commentary_data() -> Dict[str, Any]:
+    data = load_json_data("commentary_templates.json")
+    if not isinstance(data, dict):
+        raise RuntimeError("commentary_templates.json はオブジェクトである必要があります")
+    return data
+
+
+def commentary_text(
+    section: str,
+    key: str,
+    default: str = "",
+    rng: Optional[random.Random] = None,
+    **values: Any,
+) -> str:
+    """実況テンプレートを取得して整形する。
+
+    テンプレートを配列にした場合だけ rng で選択する。rng 未指定時は先頭を使い、
+    レース処理用乱数を消費しない。
     """
-    各ランクの番組用タンク候補。
-    名前はA級を基準に、D/C/B/S用は同系統の性能差として定義している。
-    """
+    section_data = commentary_data().get(section, {})
+    template: Any = default
+    if isinstance(section_data, dict):
+        template = section_data.get(key, default)
+    if isinstance(template, list):
+        if not template:
+            template = default
+        else:
+            template = rng.choice(template) if rng is not None else template[0]
+    if template is None:
+        template = default
+    try:
+        return str(template).format(**values)
+    except KeyError as exc:
+        raise RuntimeError(
+            f"commentary_templates.json の {section}.{key} に必要な値がありません: {exc.args[0]}"
+        ) from exc
 
-    if rank == "D":
-        tanks = [
-            TankSpec("疾駆鼠", "逃げ", "D", 2, -1, 0, 0, 2, 5, 1, 14, "逃げ"),
-            TankSpec("煤煙走り", "逃げ", "D", 2, 0, 0, 0, 2, 5, 1, 15, "逃げ"),
-            TankSpec("灰尾疾風", "逃げ", "D", 1, 1, 1, 0, 3, 4, 1, 15, "逃げ"),
 
-            TankSpec("白尾燕", "追込", "D", 0, 2, 0, 0, 3, 5, 1, 15, "追込"),
-            TankSpec("小銀燕", "追込", "D", 1, 1, 0, 0, 3, 5, 1, 15, "追込"),
-            TankSpec("霞仔馬", "追込", "D", 0, 2, 1, 0, 3, 4, 1, 16, "追込"),
+def round_info() -> Dict[int, Dict[str, str]]:
+    raw = commentary_data().get("round_info", {})
+    if not isinstance(raw, dict):
+        raise RuntimeError("commentary_templates.json の round_info はオブジェクトである必要があります")
+    info: Dict[int, Dict[str, str]] = {}
+    for round_key, value in raw.items():
+        if not isinstance(value, dict):
+            raise RuntimeError(f"round_info.{round_key} はオブジェクトである必要があります")
+        try:
+            round_no = int(round_key)
+        except ValueError as exc:
+            raise RuntimeError(f"round_info のキーは数値文字列である必要があります: {round_key}") from exc
+        info[round_no] = {
+            "name": str(value.get("name", f"第{round_no}R")),
+            "text": str(value.get("text", "")),
+        }
+    return info
 
-            TankSpec("煤け騎士", "万能", "D", 1, 1, 1, 1, 3, 4, 1, 16, "万能"),
-            TankSpec("錆盾騎士", "万能", "D", 0, 1, 2, 1, 3, 3, 1, 17, "万能"),
-            TankSpec("黒仔従騎", "万能", "D", 1, 0, 1, 2, 3, 4, 1, 16, "万能"),
 
-            TankSpec("錆角牛", "重戦車", "D", -1, 0, 3, 2, 4, 3, 2, 20, "重戦車"),
-            TankSpec("大盾子牛", "重戦車", "D", -1, -1, 4, 2, 4, 2, 2, 22, "重戦車"),
-            TankSpec("黒小亀", "重戦車", "D", -1, 0, 3, 1, 5, 2, 2, 22, "重戦車"),
-
-            TankSpec("硝煙蠍", "射撃", "D", 0, 0, 1, 2, 3, 3, 3, 16, "射撃"),
-            TankSpec("黒筒鼠", "射撃", "D", 1, -1, 1, 2, 2, 4, 3, 15, "射撃"),
-            TankSpec("火花孔雀", "射撃", "D", -1, 1, 1, 2, 3, 3, 4, 16, "射撃"),
-
-            TankSpec("暴れ鴉", "荒くれ", "D", 1, -1, 1, 2, 2, 5, 2, 15, "荒くれ"),
-            TankSpec("血羽雛", "荒くれ", "D", 2, -1, 0, 2, 2, 5, 2, 14, "荒くれ"),
-            TankSpec("鉄嘴雛", "荒くれ", "D", 0, 0, 2, 2, 3, 4, 2, 17, "荒くれ"),
-        ]
-    elif rank == "C":
-        tanks = [
-            TankSpec("黄金仔獅子", "逃げ", "C", 3, -1, 1, 0, 3, 6, 1, 16, "逃げ"),
-            TankSpec("白金小流星", "逃げ", "C", 3, -1, 0, 0, 2, 6, 1, 15, "逃げ"),
-            TankSpec("蒼尾若風", "逃げ", "C", 2, 0, 1, 0, 3, 5, 1, 18, "逃げ"),
-
-            TankSpec("白煙燕", "追込", "C", 1, 3, 0, 0, 3, 6, 1, 15, "追込"),
-            TankSpec("銀羽若燕", "追込", "C", 1, 2, 1, 0, 3, 5, 1, 17, "追込"),
-            TankSpec("霞走り見習", "追込", "C", 2, 1, 1, 0, 3, 5, 1, 18, "追込"),
-
-            TankSpec("黒輪従騎士", "万能", "C", 1, 2, 2, 1, 4, 5, 1, 18, "万能"),
-            TankSpec("銀甲従騎", "万能", "C", 1, 1, 2, 1, 4, 4, 1, 20, "万能"),
-            TankSpec("黒獅子見習", "万能", "C", 1, 1, 1, 2, 3, 5, 2, 18, "万能"),
-
-            TankSpec("鉄角牛", "重戦車", "C", -1, 0, 3, 2, 5, 3, 2, 21, "重戦車"),
-            TankSpec("大盾牛", "重戦車", "C", -1, -1, 4, 2, 5, 3, 2, 24, "重戦車"),
-            TankSpec("黒鋼小亀", "重戦車", "C", -1, 0, 4, 1, 5, 3, 2, 23, "重戦車"),
-
-            TankSpec("赤錆蠍", "射撃", "C", 0, 1, 1, 3, 3, 4, 4, 18, "射撃"),
-            TankSpec("黒筒狐見習", "射撃", "C", 1, 0, 1, 3, 3, 4, 3, 18, "射撃"),
-            TankSpec("硝煙孔雀雛", "射撃", "C", 0, 0, 1, 3, 3, 4, 5, 17, "射撃"),
-
-            TankSpec("裂け烏", "荒くれ", "C", 1, 0, 1, 2, 3, 5, 3, 18, "荒くれ"),
-            TankSpec("血煙若鴉", "荒くれ", "C", 2, -1, 1, 2, 2, 6, 3, 16, "荒くれ"),
-            TankSpec("鉄嘴若鷲", "荒くれ", "C", 1, 0, 2, 2, 3, 5, 2, 19, "荒くれ"),
-        ]
-    elif rank == "B":
-        tanks = [
-            TankSpec("黄金獅子", "逃げ", "B", 3, 0, 1, 1, 3, 6, 1, 18, "逃げ"),
-            TankSpec("白金流星B", "逃げ", "B", 3, -1, 1, 0, 3, 7, 1, 18, "逃げ"),
-            TankSpec("蒼尾疾風B", "逃げ", "B", 2, 1, 1, 0, 4, 5, 1, 20, "逃げ"),
-
-            TankSpec("白閃燕", "追込", "B", 1, 3, 1, 0, 3, 6, 1, 18, "追込"),
-            TankSpec("銀羽燕B", "追込", "B", 1, 3, 1, 0, 4, 5, 1, 19, "追込"),
-            TankSpec("霞走りB", "追込", "B", 2, 2, 1, 0, 4, 5, 1, 18, "追込"),
-
-            TankSpec("黒輪騎士", "万能", "B", 1, 2, 2, 1, 4, 5, 2, 20, "万能"),
-            TankSpec("銀甲騎士B", "万能", "B", 1, 1, 3, 1, 4, 5, 2, 21, "万能"),
-            TankSpec("黒獅子従騎B", "万能", "B", 1, 1, 2, 2, 4, 5, 2, 20, "万能"),
-
-            TankSpec("大鉄角", "重戦車", "B", 0, 0, 4, 3, 5, 3, 2, 21, "重戦車"),
-            TankSpec("大盾牛B", "重戦車", "B", -1, 0, 4, 3, 5, 3, 3, 24, "重戦車"),
-            TankSpec("黒鋼亀B", "重戦車", "B", -1, 1, 4, 2, 5, 3, 3, 24, "重戦車"),
-
-            TankSpec("赤錆大蠍", "射撃", "B", 1, 1, 2, 3, 3, 4, 4, 20, "射撃"),
-            TankSpec("黒筒狐B", "射撃", "B", 2, 0, 1, 3, 3, 5, 4, 18, "射撃"),
-            TankSpec("硝煙孔雀B", "射撃", "B", 0, 1, 2, 3, 4, 4, 5, 20, "射撃"),
-
-            TankSpec("血羽烏", "荒くれ", "B", 2, 0, 1, 3, 3, 5, 3, 18, "荒くれ"),
-            TankSpec("凶鳥B", "荒くれ", "B", 2, 1, 1, 3, 3, 5, 3, 18, "荒くれ"),
-            TankSpec("鉄嘴鷲B", "荒くれ", "B", 1, 1, 2, 3, 3, 5, 2, 20, "荒くれ"),
-        ]
-    elif rank == "A":
-        tanks = [
-            TankSpec("黄金王獅子", "逃げ", "A", 3, 0, 2, 1, 4, 6, 2, 21, "逃げ"),
-            TankSpec("白金流星", "逃げ", "A", 3, -1, 1, 0, 3, 7, 1, 18, "逃げ"),
-            TankSpec("蒼尾疾風", "逃げ", "A", 2, 1, 2, 0, 4, 6, 1, 20, "逃げ"),
-
-            TankSpec("白雷燕", "追込", "A", 1, 3, 1, 1, 4, 6, 1, 21, "追込"),
-            TankSpec("銀羽燕", "追込", "A", 1, 3, 1, 0, 4, 6, 1, 21, "追込"),
-            TankSpec("霞走り", "追込", "A", 2, 2, 1, 0, 4, 6, 1, 21, "追込"),
-
-            TankSpec("黒輪聖騎士", "万能", "A", 1, 2, 2, 2, 4, 5, 1, 22, "万能"),
-            TankSpec("銀甲騎士", "万能", "A", 1, 1, 3, 1, 5, 5, 2, 24, "万能"),
-            TankSpec("黒獅子従騎", "万能", "A", 1, 1, 2, 2, 4, 5, 2, 22, "万能"),
-
-            TankSpec("城砕き鉄角", "重戦車", "A", 0, 1, 4, 3, 5, 4, 3, 24, "重戦車"),
-            TankSpec("黒鋼亀", "重戦車", "A", -1, 0, 4, 2, 6, 3, 3, 30, "重戦車"),
-            TankSpec("大盾牛", "重戦車", "A", -1, 0, 4, 3, 5, 4, 4, 27, "重戦車"),
-
-            TankSpec("紅毒蠍", "射撃", "A", 1, 2, 2, 3, 4, 4, 4, 21, "射撃"),
-            TankSpec("硝煙孔雀", "射撃", "A", 0, 1, 2, 3, 4, 4, 5, 22, "射撃"),
-            TankSpec("黒筒狐", "射撃", "A", 2, 0, 2, 3, 3, 5, 4, 20, "射撃"),
-
-            TankSpec("凶鳥ヴォロス", "荒くれ", "A", 2, 1, 2, 3, 3, 6, 3, 21, "荒くれ"),
-            TankSpec("血煙鴉", "荒くれ", "A", 2, -1, 1, 3, 3, 6, 4, 20, "荒くれ"),
-            TankSpec("鉄嘴鷲", "荒くれ", "A", 1, 1, 3, 3, 4, 5, 3, 23, "荒くれ"),
-        ]
-    elif rank == "S":
-        tanks = [
-            TankSpec("太陽獅子", "逃げ", "S", 3, 1, 2, 1, 4, 7, 2, 24, "逃げ"),
-            TankSpec("白金星流", "逃げ", "S", 3, 0, 2, 1, 4, 8, 2, 24, "逃げ"),
-            TankSpec("蒼天疾風", "逃げ", "S", 2, 2, 2, 1, 5, 6, 2, 25, "逃げ"),
-
-            TankSpec("天裂燕", "追込", "S", 1, 3, 1, 1, 4, 8, 1, 24, "追込"),
-            TankSpec("銀天燕", "追込", "S", 2, 3, 1, 1, 5, 6, 1, 24, "追込"),
-            TankSpec("霞天走り", "追込", "S", 2, 2, 2, 1, 5, 6, 2, 26, "追込"),
-
-            TankSpec("黒輪覇騎士", "万能", "S", 2, 2, 2, 2, 5, 6, 2, 24, "万能"),
-            TankSpec("銀甲覇騎士", "万能", "S", 1, 2, 3, 2, 5, 6, 2, 26, "万能"),
-            TankSpec("黒獅子覇従騎", "万能", "S", 2, 1, 3, 2, 5, 6, 3, 26, "万能"),
-
-            TankSpec("巨神鉄角", "重戦車", "S", 1, 1, 4, 3, 6, 4, 4, 30, "重戦車"),
-            TankSpec("大城盾牛", "重戦車", "S", 0, 1, 4, 3, 6, 5, 4, 30, "重戦車"),
-            TankSpec("黒鋼巨亀", "重戦車", "S", 0, 0, 4, 3, 7, 4, 5, 33, "重戦車"),
-
-            TankSpec("紅蓮蠍", "射撃", "S", 2, 2, 3, 3, 4, 5, 5, 24, "射撃"),
-            TankSpec("硝煙大孔雀", "射撃", "S", 1, 2, 3, 3, 5, 5, 6, 25, "射撃"),
-            TankSpec("黒筒天狐", "射撃", "S", 2, 1, 3, 3, 4, 6, 5, 24, "射撃"),
-
-            TankSpec("災厄烏", "荒くれ", "S", 3, 1, 2, 3, 3, 7, 4, 24, "荒くれ"),
-            TankSpec("血煙大鴉", "荒くれ", "S", 3, 0, 2, 3, 3, 7, 5, 24, "荒くれ"),
-            TankSpec("鉄嘴大鷲", "荒くれ", "S", 2, 1, 3, 3, 4, 6, 4, 26, "荒くれ"),
-        ]
+def _tank_spec_from_json(rank: str, index: int, entry: Any, fields: List[str]) -> TankSpec:
+    if isinstance(entry, list):
+        if len(entry) != len(fields):
+            raise RuntimeError(
+                f"tanks.json の {rank}[{index}] は fields と同じ要素数である必要があります"
+            )
+        values = dict(zip(fields, entry))
+    elif isinstance(entry, dict):
+        values = dict(entry)
     else:
-        raise ValueError(f"unknown rank: {rank}")
+        raise RuntimeError(f"tanks.json の {rank}[{index}] は配列またはオブジェクトである必要があります")
 
+    missing = [name for name in TANK_FIELDS if name not in values]
+    if missing:
+        raise RuntimeError(f"tanks.json の {rank}[{index}] に不足項目があります: {', '.join(missing)}")
+
+    try:
+        spec = TankSpec(**{name: values[name] for name in TANK_FIELDS})
+    except TypeError as exc:
+        raise RuntimeError(f"tanks.json の {rank}[{index}] から TankSpec を生成できません: {exc}") from exc
+    if spec.rank != rank:
+        raise RuntimeError(f"tanks.json の {rank}[{index}] の rank が一致しません: {spec.rank}")
+    return spec
+
+
+def make_rank_tanks(rank: str) -> Dict[str, TankSpec]:
+    """指定ランクの戦車候補を tanks.json から生成する。"""
+    data = tank_data()
+    ranks = data["ranks"]
+    if rank not in ranks:
+        available = ", ".join(sorted(ranks.keys()))
+        raise ValueError(f"unknown rank: {rank} (available: {available})")
+
+    fields = data.get("fields", TANK_FIELDS)
+    if not isinstance(fields, list) or not all(isinstance(name, str) for name in fields):
+        raise RuntimeError("tanks.json の fields は文字列配列である必要があります")
+
+    entries = ranks[rank]
+    if not isinstance(entries, list):
+        raise RuntimeError(f"tanks.json の ranks.{rank} は配列である必要があります")
+
+    tanks = [_tank_spec_from_json(rank, idx, entry, fields) for idx, entry in enumerate(entries)]
     return {t.name: t for t in tanks}
 
 
 def program_names() -> List[str]:
-    return ["standard", "speed", "technique", "heavy", "shooting", "chaos"]
+    return list(program_data()["programs"].keys())
+
+
+def program_labels() -> Dict[str, str]:
+    labels: Dict[str, str] = {}
+    for name, config in program_data()["programs"].items():
+        if not isinstance(config, dict):
+            raise RuntimeError(f"programs.json の programs.{name} はオブジェクトである必要があります")
+        labels[name] = str(config.get("label", name))
+    return labels
 
 
 def make_program(rank: str, program: str) -> List[TankSpec]:
-    t = make_rank_tanks(rank)
-    # 名前は各ランクで異なるため、styleから選ぶ。
+    specs_by_name = make_rank_tanks(rank)
     by_style: Dict[str, List[TankSpec]] = {}
-    for spec in t.values():
+    for spec in specs_by_name.values():
         by_style.setdefault(spec.style, []).append(spec)
 
-    # 各リストの順序は make_rank_tanks 内の順序に依存。
-    def pick(style: str, idx: int) -> TankSpec:
-        return by_style[style][idx]
+    programs = program_data()["programs"]
+    if program not in programs:
+        available = ", ".join(programs.keys())
+        raise ValueError(f"unknown program: {program} (available: {available})")
 
-    if program == "standard":
-        return [
-            pick("逃げ", 0), pick("追込", 0), pick("万能", 0),
-            pick("重戦車", 0), pick("射撃", 0), pick("荒くれ", 0),
-        ]
-    if program == "speed":
-        # Ver.0.4: 通常の高速戦は「逃げ2・追込2・万能2」。
-        # 旧来の逃げ3構成は、必要なら別番組「超高速戦」として追加する想定。
-        return [
-            pick("逃げ", 0), pick("逃げ", 1),
-            pick("追込", 0), pick("追込", 1),
-            pick("万能", 0), pick("万能", 1),
-        ]
-    if program == "technique":
-        return [
-            pick("追込", 0), pick("追込", 1), pick("追込", 2),
-            pick("万能", 0), pick("万能", 1), pick("射撃", 0),
-        ]
-    if program == "heavy":
-        return [
-            pick("重戦車", 0), pick("重戦車", 1), pick("重戦車", 2),
-            pick("荒くれ", 2), pick("万能", 2), pick("逃げ", 0),
-        ]
-    if program == "shooting":
-        return [
-            pick("射撃", 0), pick("射撃", 1), pick("射撃", 2),
-            pick("重戦車", 0), pick("万能", 1), pick("追込", 0),
-        ]
-    if program == "chaos":
-        return [
-            pick("荒くれ", 0), pick("荒くれ", 1), pick("荒くれ", 2),
-            pick("重戦車", 0), pick("射撃", 0), pick("逃げ", 1),
-        ]
-    raise ValueError(f"unknown program: {program}")
+    config = programs[program]
+    if not isinstance(config, dict) or not isinstance(config.get("entries"), list):
+        raise RuntimeError(f"programs.json の programs.{program}.entries は配列である必要があります")
+
+    selected: List[TankSpec] = []
+    for entry_no, entry in enumerate(config["entries"]):
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"programs.json の {program}.entries[{entry_no}] はオブジェクトである必要があります")
+        style = str(entry.get("style", ""))
+        try:
+            index = int(entry.get("index", 0))
+            selected.append(by_style[style][index])
+        except KeyError as exc:
+            raise RuntimeError(f"programs.json の {program}.entries[{entry_no}] に未知の style があります: {style}") from exc
+        except IndexError as exc:
+            raise RuntimeError(
+                f"programs.json の {program}.entries[{entry_no}] は {style} の index {index} を参照できません"
+            ) from exc
+    return selected
 
 
 # ============================================================
@@ -1175,7 +1188,7 @@ def resolve_placement_phase(
     後列配置: 駆動力+1
     """
     if log is not None:
-        log.append("\n=== 配置決めフェーズ ===")
+        log.append(commentary_text("sim_log", "placement_phase_start", "\n=== 配置決めフェーズ ==="))
 
     for t in tanks:
         intent = choose_placement(rng, t)
@@ -1230,6 +1243,7 @@ def race_once(
     specs: List[TankSpec],
     rng: random.Random,
     log_enabled: bool = False,
+    commentary_rng: Optional[random.Random] = None,
 ) -> RaceResult:
     tanks = [TankState(spec=s) for s in specs]
     log: List[str] = []
@@ -1239,7 +1253,7 @@ def race_once(
 
     for round_no in range(1, 7):
         if log_enabled:
-            log.append(f"\n=== R{round_no} ===")
+            log.append(commentary_text("sim_log", "round_start", "\n=== R{round_no} ===", rng=commentary_rng, round_no=round_no))
         # ラウンド開始時の予約クリア
         for t in tanks:
             t.move_reserved = False
@@ -1286,18 +1300,18 @@ def race_once(
 
         if log_enabled:
             ordered = sorted([t for t in tanks if not t.retired], key=lambda x: (x.area.value, x.lead, x.hp), reverse=True)
-            log.append("  暫定順位: " + " / ".join(
+            log.append(commentary_text("sim_log", "ranking_prefix", "  暫定順位: ", rng=commentary_rng) + " / ".join(
                 f"{i+1}.{x.name}[{x.area.jp} 先{x.lead} HP{x.hp} 安{x.stability} 駆{x.drive} 弾{x.ammo}]"
                 for i, x in enumerate(ordered)
             ))
 
     if log_enabled:
-        log.append("\n=== 最終順位判定 ===")
+        log.append(commentary_text("sim_log", "final_phase_start", "\n=== 最終順位判定 ===", rng=commentary_rng))
     order = final_order(rng, tanks, log if log_enabled else None)
     accidents = sum(t.accidents for t in tanks)
 
     if log_enabled:
-        log.append("  確定順位: " + " / ".join(f"{i+1}.{t.name}" for i, t in enumerate(order)))
+        log.append(commentary_text("sim_log", "final_order_prefix", "  確定順位: ", rng=commentary_rng) + " / ".join(f"{i+1}.{t.name}" for i, t in enumerate(order)))
 
     return RaceResult(order=order, states=tanks, accident_count=accidents, log=log)
 
