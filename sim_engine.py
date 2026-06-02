@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-鉄輪式三列戦車レース Ver.0.3 簡易シミュレータ
+鉄輪式三列戦車レース Ver.0.5.1 簡易シミュレータ
 
 このスクリプトは、アルカ・ヴェルジア「グランド・サーキット・アルカ」の
 戦車レースルール検討用に作った検証用実装です。
@@ -10,7 +10,8 @@
 - 卓上運用向けの簡易AIです。厳密な最適AIではありません。
 - これまでチャット上で出した統計値を完全再現する乱数シード・実装ログではなく、
   現行ルールを再検証するための再現用プログラムです。
-- 状態異常なし、大成功は出目11以上かつ自動成功、先行点倍化なし、配置決めフェーズありのVer.0.4相当です。
+- 状態異常なし、大成功は出目11以上かつ自動成功、先行点倍化なし、配置決めフェーズあり、
+  改良AI + A/B/Cルール + 逃げ型駆動力-1のVer.0.5.1相当です。
 
 実行例:
     python chariot_race_sim_v03.py --program standard --rank A --races 20000 --seed 42
@@ -513,99 +514,279 @@ BASE_WEIGHTS: Dict[str, Dict[Action, int]] = {
 }
 
 
-def action_weights(t: TankState, round_no: int) -> Dict[Action, int]:
+INTERFERENCE_ACTIONS = {
+    Action.CONTACT,
+    Action.DANGEROUS_CONTACT,
+    Action.SHOOT,
+    Action.HEAVY_SHOOT,
+    Action.PIN_SHOOT,
+}
+CONTACT_ACTIONS = {Action.CONTACT, Action.DANGEROUS_CONTACT}
+SHOOTING_ACTIONS = {Action.SHOOT, Action.HEAVY_SHOOT, Action.PIN_SHOOT}
+RISKY_ACTIONS = {Action.OVERTAKE, Action.DANGEROUS_CONTACT}
+
+
+def current_order(tanks: List[TankState]) -> List[TankState]:
+    return sorted(
+        [t for t in tanks if not t.retired],
+        key=lambda x: (x.area.value, x.lead, x.hp, x.stability),
+        reverse=True,
+    )
+
+
+def rank_positions(tanks: List[TankState]) -> Dict[str, int]:
+    return {tank.name: index + 1 for index, tank in enumerate(current_order(tanks))}
+
+
+def race_phase(round_no: int) -> str:
+    if round_no <= 2:
+        return "early"
+    if round_no <= 4:
+        return "middle"
+    return "late"
+
+
+def add_score(scores: Dict[Action, float], action: Action, amount: float) -> None:
+    scores[action] = scores.get(action, 0.0) + amount
+
+
+def multiply_score(scores: Dict[Action, float], action: Action, factor: float) -> None:
+    scores[action] = scores.get(action, 0.0) * factor
+
+
+def action_scores(t: TankState, tanks: List[TankState], round_no: int) -> Dict[Action, float]:
+    """Ver.0.5.1: 汎用スコア制AI。番組別補正は使わない。"""
     style = t.spec.ai or t.style
-    weights = dict(BASE_WEIGHTS[style])
+    scores: Dict[Action, float] = {action: float(score) for action, score in BASE_WEIGHTS[style].items()}
+    phase = race_phase(round_no)
+    positions = rank_positions(tanks)
+    rank = positions.get(t.name, len(positions) + 1)
+    field_size = max(1, len(positions))
+    lower_half = rank > max(1, field_size // 2)
 
-    # 追込型は後半に追い抜きを増やす
-    if style == "追込" and round_no >= 4:
-        weights = {
-            Action.ACCEL: 35,
-            Action.OVERTAKE: 30,
-            Action.CRUISE: 15,
-            Action.DEFEND: 10,
-            Action.REPAIR: 5,
-            Action.SHOOT: 5,
-        }
+    # 追込型は終盤に脚を使うが、番組別補正ではなくタイプ特性として扱う。
+    if style == "追込":
+        if phase == "early":
+            add_score(scores, Action.CRUISE, 12)
+            add_score(scores, Action.REPAIR, 6)
+            add_score(scores, Action.ACCEL, -8)
+        elif phase == "late":
+            add_score(scores, Action.ACCEL, 18)
+            add_score(scores, Action.OVERTAKE, 24)
+            add_score(scores, Action.CRUISE, -8)
 
-    # 前列にいる時は守り・先行点狙いを増やす
-    if t.area == Area.FRONT:
-        weights[Action.DEFEND] = weights.get(Action.DEFEND, 0) + 10
-        weights[Action.CRUISE] = weights.get(Action.CRUISE, 0) + 10
-        weights[Action.OVERTAKE] = max(0, weights.get(Action.OVERTAKE, 0) - 10)
-
-    # 後列にいる時は前進行動を増やす
-    if t.area == Area.BACK:
-        weights[Action.ACCEL] = weights.get(Action.ACCEL, 0) + 10
-        weights[Action.OVERTAKE] = weights.get(Action.OVERTAKE, 0) + 10
-        weights[Action.DEFEND] = max(0, weights.get(Action.DEFEND, 0) - 10)
-
-    # 安定値が低い時
-    if t.stability <= 1:
-        if style != "荒くれ":
-            weights[Action.REPAIR] = weights.get(Action.REPAIR, 0) + 20
-            weights[Action.OVERTAKE] = max(0, weights.get(Action.OVERTAKE, 0) - 10)
-            weights[Action.DANGEROUS_CONTACT] = max(0, weights.get(Action.DANGEROUS_CONTACT, 0) - 10)
+    if phase == "early":
+        add_score(scores, Action.CRUISE, 8)
+        add_score(scores, Action.DEFEND, 4)
+        if style in ("逃げ", "万能"):
+            add_score(scores, Action.ACCEL, 8)
+    elif phase == "middle":
+        add_score(scores, Action.CONTACT, 6)
+        add_score(scores, Action.SHOOT, 6)
+        add_score(scores, Action.OVERTAKE, 6)
+    else:
+        add_score(scores, Action.ACCEL, 12)
+        add_score(scores, Action.OVERTAKE, 16)
+        add_score(scores, Action.SHOOT, 8)
+        add_score(scores, Action.HEAVY_SHOOT, 6)
+        if lower_half:
+            add_score(scores, Action.DANGEROUS_CONTACT, 14)
+            add_score(scores, Action.OVERTAKE, 12)
         else:
-            weights[Action.REPAIR] = weights.get(Action.REPAIR, 0) + 10
+            add_score(scores, Action.DEFEND, 10)
+            add_score(scores, Action.CRUISE, 8)
 
-    # 耐久値が半分以下
+    if t.area == Area.FRONT:
+        add_score(scores, Action.CRUISE, 18)
+        add_score(scores, Action.DEFEND, 12)
+        add_score(scores, Action.SHOOT, 5)
+        add_score(scores, Action.ACCEL, -8)
+        add_score(scores, Action.OVERTAKE, -20)
+    elif t.area == Area.MID:
+        add_score(scores, Action.ACCEL, 8)
+        add_score(scores, Action.CONTACT, 5)
+        add_score(scores, Action.SHOOT, 3)
+    else:
+        add_score(scores, Action.ACCEL, 18)
+        add_score(scores, Action.OVERTAKE, 18)
+        add_score(scores, Action.CRUISE, 6)
+        add_score(scores, Action.SHOOT, 6)
+        add_score(scores, Action.DEFEND, -10)
+
+    if rank <= 2:
+        add_score(scores, Action.DEFEND, 12)
+        add_score(scores, Action.CRUISE, 12)
+        add_score(scores, Action.OVERTAKE, -8)
+        add_score(scores, Action.DANGEROUS_CONTACT, -8)
+    elif lower_half:
+        add_score(scores, Action.ACCEL, 10)
+        add_score(scores, Action.OVERTAKE, 14)
+        add_score(scores, Action.SHOOT, 5)
+        add_score(scores, Action.CONTACT, 5)
+        if phase == "late":
+            add_score(scores, Action.DANGEROUS_CONTACT, 12)
+
+    if t.stability <= 1:
+        add_score(scores, Action.REPAIR, 15 if style == "荒くれ" else 30)
+        risk_factor = 0.75 if style == "荒くれ" else 0.45
+        for action in RISKY_ACTIONS:
+            multiply_score(scores, action, risk_factor)
+    if t.stability <= 0:
+        add_score(scores, Action.REPAIR, 15)
+        add_score(scores, Action.DEFEND, 8)
+
     if t.hp <= t.spec.hp / 2:
-        weights[Action.DEFEND] = weights.get(Action.DEFEND, 0) + 10
-        weights[Action.REPAIR] = weights.get(Action.REPAIR, 0) + 5
-        weights[Action.DANGEROUS_CONTACT] = max(0, weights.get(Action.DANGEROUS_CONTACT, 0) - 10)
+        add_score(scores, Action.DEFEND, 12)
+        add_score(scores, Action.REPAIR, 10)
+        risk_factor = 0.78 if style == "荒くれ" else 0.55
+        for action in RISKY_ACTIONS:
+            multiply_score(scores, action, risk_factor)
+    if t.hp <= t.spec.hp / 3:
+        add_score(scores, Action.DEFEND, 10)
+        add_score(scores, Action.REPAIR, 10)
 
-    return weights
+    if t.drive >= 4 and phase == "late" and lower_half:
+        add_score(scores, Action.ACCEL, 10)
+        add_score(scores, Action.OVERTAKE, 10)
+    elif t.drive <= 1:
+        add_score(scores, Action.CRUISE, 8)
+        add_score(scores, Action.DEFEND, 5)
+        add_score(scores, Action.REPAIR, 4)
+
+    if t.ammo >= 2 and style == "射撃":
+        add_score(scores, Action.HEAVY_SHOOT, 10)
+        add_score(scores, Action.PIN_SHOOT, 8)
+    elif t.ammo == 1:
+        add_score(scores, Action.SHOOT, 6)
+        add_score(scores, Action.PIN_SHOOT, 5)
+        add_score(scores, Action.HEAVY_SHOOT, -20)
+
+    if t.area == Area.FRONT and t.lead <= 1:
+        add_score(scores, Action.CRUISE, 8)
+        add_score(scores, Action.ACCEL, 4)
+    if t.area == Area.FRONT and t.lead >= 3:
+        add_score(scores, Action.DEFEND, 8)
+        add_score(scores, Action.CRUISE, 8)
+
+    return {action: max(0.0, score) for action, score in scores.items()}
 
 
-def choose_weighted(rng: random.Random, weights: Dict[Action, int]) -> Action:
-    total = sum(max(0, w) for w in weights.values())
-    if total <= 0:
-        return Action.CRUISE
-    x = rng.uniform(0, total)
-    acc = 0.0
-    for action, weight in weights.items():
-        w = max(0, weight)
-        acc += w
-        if x <= acc:
-            return action
-    return list(weights.keys())[-1]
+def has_contact_target(t: TankState, tanks: List[TankState]) -> bool:
+    return any(not x.retired and x is not t and x.area == t.area for x in tanks)
 
 
-def legal_actions(t: TankState, tanks: List[TankState], weights: Dict[Action, int]) -> Dict[Action, int]:
-    w = dict(weights)
+def has_shooting_target(t: TankState, tanks: List[TankState]) -> bool:
+    return any(not x.retired and x is not t for x in tanks)
 
-    same_area_targets = [x for x in tanks if (not x.retired and x is not t and x.area == t.area)]
-    other_area_targets = [x for x in tanks if (not x.retired and x is not t and x.area != t.area)]
+
+def legal_actions(t: TankState, tanks: List[TankState], scores: Dict[Action, float]) -> Dict[Action, float]:
+    legal = dict(scores)
 
     if t.drive <= 0:
-        w[Action.ACCEL] = 0
-        w[Action.OVERTAKE] = 0
+        legal[Action.ACCEL] = 0.0
+        legal[Action.OVERTAKE] = 0.0
     if t.drive < 2:
-        w[Action.OVERTAKE] = 0
+        legal[Action.OVERTAKE] = 0.0
     if t.ammo <= 0:
-        w[Action.SHOOT] = 0
-        w[Action.HEAVY_SHOOT] = 0
-        w[Action.PIN_SHOOT] = 0
+        for action in SHOOTING_ACTIONS:
+            legal[action] = 0.0
     if t.ammo < 2:
-        w[Action.HEAVY_SHOOT] = 0
-    if not same_area_targets:
-        w[Action.CONTACT] = 0
-        w[Action.DANGEROUS_CONTACT] = 0
-    if not other_area_targets:
-        w[Action.SHOOT] = 0
-        w[Action.HEAVY_SHOOT] = 0
-        w[Action.PIN_SHOOT] = 0
+        legal[Action.HEAVY_SHOOT] = 0.0
+    if not has_contact_target(t, tanks):
+        for action in CONTACT_ACTIONS:
+            legal[action] = 0.0
+    if not has_shooting_target(t, tanks):
+        for action in SHOOTING_ACTIONS:
+            legal[action] = 0.0
 
-    # 使えない分を巡航・加速に少し戻す
-    if sum(max(0, v) for v in w.values()) <= 0:
-        return {Action.CRUISE: 1}
-    return w
+    if sum(max(0.0, score) for score in legal.values()) <= 0:
+        return {Action.CRUISE: 1.0}
+    return legal
+
+
+def choose_weighted_action(rng: random.Random, scores: Dict[Action, float]) -> Action:
+    total = sum(max(0.0, score) for score in scores.values())
+    if total <= 0:
+        return Action.CRUISE
+    point = rng.uniform(0, total)
+    acc = 0.0
+    fallback = Action.CRUISE
+    for action, score in scores.items():
+        weight = max(0.0, score)
+        if weight <= 0:
+            continue
+        fallback = action
+        acc += weight
+        if point <= acc:
+            return action
+    return fallback
 
 
 def choose_action(rng: random.Random, t: TankState, tanks: List[TankState], round_no: int) -> Action:
-    w = legal_actions(t, tanks, action_weights(t, round_no))
-    return choose_weighted(rng, w)
+    scores = legal_actions(t, tanks, action_scores(t, tanks, round_no))
+    return choose_weighted_action(rng, scores)
+
+
+def choose_weighted_target(rng: random.Random, scores: List[Tuple[TankState, float]]) -> Optional[TankState]:
+    total = sum(max(0.0, score) for _, score in scores)
+    if total <= 0:
+        return None
+    point = rng.uniform(0, total)
+    acc = 0.0
+    fallback: Optional[TankState] = None
+    for target, score in scores:
+        weight = max(0.0, score)
+        if weight <= 0:
+            continue
+        fallback = target
+        acc += weight
+        if point <= acc:
+            return target
+    return fallback
+
+
+def target_scores(
+    attacker: TankState,
+    tanks: List[TankState],
+    action: Action,
+) -> List[Tuple[TankState, float]]:
+    positions = rank_positions(tanks)
+    attacker_rank = positions.get(attacker.name, len(positions) + 1)
+
+    if action in CONTACT_ACTIONS:
+        candidates = [x for x in tanks if not x.retired and x is not attacker and x.area == attacker.area]
+    elif action in SHOOTING_ACTIONS:
+        candidates = [x for x in tanks if not x.retired and x is not attacker]
+    else:
+        candidates = [x for x in tanks if not x.retired and x is not attacker]
+
+    scores: List[Tuple[TankState, float]] = []
+    for target in candidates:
+        target_rank = positions.get(target.name, len(positions) + 1)
+        score = 1.0
+        if target_rank < attacker_rank:
+            score += 24 + (attacker_rank - target_rank) * 4
+
+        if action in SHOOTING_ACTIONS:
+            score += target.area.value * 18
+            score += target.lead * 6
+            score += max(0, 4 - target.stability) * 6
+            if target.area == Area.FRONT:
+                score += 16
+            if target.hp <= target.spec.hp / 2:
+                score += 6
+        elif action in CONTACT_ACTIONS:
+            score += 30
+            score += max(0, 4 - target.armor) * 8
+            score += max(0, 4 - target.stability) * 6
+            score += target.lead * 5
+            if target.area == Area.FRONT:
+                score += 8
+        else:
+            score += target.lead * 3
+
+        scores.append((target, max(1.0, score)))
+    return scores
 
 
 def choose_target(
@@ -614,37 +795,7 @@ def choose_target(
     tanks: List[TankState],
     action: Action,
 ) -> Optional[TankState]:
-    if action in (Action.CONTACT, Action.DANGEROUS_CONTACT):
-        candidates = [x for x in tanks if not x.retired and x is not attacker and x.area == attacker.area]
-    else:
-        candidates = [x for x in tanks if not x.retired and x is not attacker and x.area != attacker.area]
-
-    if not candidates:
-        return None
-
-    # 射撃型: 前列・先行点・安定低・前方を狙う
-    if action in (Action.SHOOT, Action.HEAVY_SHOOT, Action.PIN_SHOOT):
-        def score(x: TankState) -> Tuple[int, int, int, float]:
-            return (
-                x.area.value,
-                x.lead,
-                -x.stability,
-                rng.random(),
-            )
-        return max(candidates, key=score)
-
-    # 接触系: 同エリアの低装甲・前列・先行点持ちを狙う
-    if action in (Action.CONTACT, Action.DANGEROUS_CONTACT):
-        def score2(x: TankState) -> Tuple[int, int, int, float]:
-            return (
-                x.area.value,
-                x.lead,
-                -x.armor,
-                rng.random(),
-            )
-        return max(candidates, key=score2)
-
-    return rng.choice(candidates)
+    return choose_weighted_target(rng, target_scores(attacker, tanks, action))
 
 
 # ============================================================
@@ -671,6 +822,44 @@ def shooting_modifier(attacker: TankState, defender: TankState) -> int:
     elif attacker.area.value < defender.area.value:
         mod -= 1
     return mod
+
+
+def weight_collision_bonus(attacker: TankState, defender: TankState) -> int:
+    armor_diff = attacker.armor - defender.armor
+    if armor_diff >= 3:
+        return 2
+    if armor_diff >= 1:
+        return 1
+    return 0
+
+
+def interference_control_bonus(
+    attacker: TankState,
+    defender: TankState,
+    action: Action,
+) -> Tuple[int, List[str]]:
+    bonus = 0
+    reasons: List[str] = []
+
+    # Ver.0.5.1 A: 移動予約中の戦車は、妨害後の制御判定で体勢を崩しやすい。
+    if action in INTERFERENCE_ACTIONS and defender.move_reserved:
+        bonus += 1
+        reasons.append("移動予約中+1")
+
+    # Ver.0.5.1 B: 接触系は攻撃側の装甲が重いほど制御判定が重くなる。
+    if action in CONTACT_ACTIONS:
+        collision_bonus = weight_collision_bonus(attacker, defender)
+        if collision_bonus > 0:
+            bonus += collision_bonus
+            reasons.append(f"重量衝突+{collision_bonus}")
+
+    return bonus, reasons
+
+
+def control_reason(source: str, reasons: List[str]) -> str:
+    if reasons:
+        return f"/{source}(" + "・".join(reasons) + ")"
+    return f"/{source}"
 
 
 def resolve_control_check(
@@ -730,7 +919,7 @@ def accident(rng: random.Random, t: TankState, log: Optional[List[str]] = None, 
     t.accidents += 1
     result = d6(rng)
     if log is not None:
-        log.append(f"    事故判定({reason}): 1d6={result}")
+        log.append(f"    事故判定: {t.name}({reason}): 1d6={result}")
 
     if result == 1:
         t.retired = True
@@ -743,25 +932,25 @@ def accident(rng: random.Random, t: TankState, log: Optional[List[str]] = None, 
         t.hp -= 5
         t.lead = 0
         if log is not None:
-            log.append(f"    → 横転: 後列へ、HP-5")
+            log.append(f"    → {t.name} 横転: 後列へ、HP-5")
     elif result == 3:
         t.area = t.area.left()
         t.hp -= 3
         t.lead = 0
         if log is not None:
-            log.append(f"    → 激突: 1段階後退、HP-3")
+            log.append(f"    → {t.name} 激突: 1段階後退、HP-3")
     elif result == 4:
         t.hp -= 3
         if log is not None:
-            log.append(f"    → 車体損傷: HP-3")
+            log.append(f"    → {t.name} 車体損傷: HP-3")
     elif result == 5:
         t.stability = max(t.stability, 1)
         if log is not None:
-            log.append(f"    → 立て直し: 安定1")
+            log.append(f"    → {t.name} 立て直し: 安定1")
     elif result == 6:
         t.stability = max(t.stability, 2)
         if log is not None:
-            log.append(f"    → 奇跡の復帰: 安定2、先行点維持")
+            log.append(f"    → {t.name} 奇跡の復帰: 安定2、先行点維持")
 
     if t.hp <= 0 and not t.retired:
         t.retired = True
@@ -779,6 +968,7 @@ def apply_damage(
     control_bonus: int,
     log: Optional[List[str]] = None,
     source: str = "",
+    control_reasons: Optional[List[str]] = None,
 ) -> None:
     if defender.retired:
         return
@@ -804,7 +994,13 @@ def apply_damage(
     else:
         target = 6 + actual + control_bonus
 
-    failed = resolve_control_check(rng, defender, target, log, reason=f"/{source}")
+    failed = resolve_control_check(
+        rng,
+        defender,
+        target,
+        log,
+        reason=control_reason(source, control_reasons or []),
+    )
     if failed:
         attacker.caused_control_failures += 1
 
@@ -848,14 +1044,19 @@ def resolve_attack(
 
         # 妨害大成功: 制御判定目標値+2固定
         crit_bonus = 2 if attack_roll.crit else 0
+        rule_bonus, rule_reasons = interference_control_bonus(attacker, defender, action)
+        control_bonus = crit_bonus + rule_bonus
+        control_reasons = list(rule_reasons)
+        if crit_bonus:
+            control_reasons.append("大成功+2")
 
         if action == Action.CONTACT:
-            apply_damage(rng, attacker, defender, 3, 1, crit_bonus, log, "接触")
+            apply_damage(rng, attacker, defender, 3, 1, control_bonus, log, "接触", control_reasons)
         else:
             # 危険接触は命中時点で突破予約
             attacker.move_reserved = True
             attacker.lose_stability(1)
-            apply_damage(rng, attacker, defender, 5, 2, crit_bonus, log, "危険接触")
+            apply_damage(rng, attacker, defender, 5, 2, control_bonus, log, "危険接触", control_reasons)
 
         # カーブ・障害の追加制御
         if action == Action.DANGEROUS_CONTACT:
@@ -893,18 +1094,34 @@ def resolve_attack(
 
         # 妨害大成功: 制御判定目標値+2固定
         crit_bonus = 2 if attack_roll.crit else 0
+        rule_bonus, rule_reasons = interference_control_bonus(attacker, defender, action)
 
         if action == Action.PIN_SHOOT:
             # 牽制射撃: ダメージなし、安定-1、制御目標値6
             defender.lose_stability(1)
-            failed = resolve_control_check(rng, defender, 6 + crit_bonus, log, reason="/牽制射撃")
+            control_reasons = list(rule_reasons)
+            if crit_bonus:
+                control_reasons.append("大成功+2")
+            failed = resolve_control_check(
+                rng,
+                defender,
+                6 + crit_bonus + rule_bonus,
+                log,
+                reason=control_reason("牽制射撃", control_reasons),
+            )
             if failed:
                 attacker.caused_control_failures += 1
         elif action == Action.SHOOT:
-            apply_damage(rng, attacker, defender, 2, 0, crit_bonus, log, "射撃")
+            control_reasons = list(rule_reasons)
+            if crit_bonus:
+                control_reasons.append("大成功+2")
+            apply_damage(rng, attacker, defender, 2, 0, crit_bonus + rule_bonus, log, "射撃", control_reasons)
         elif action == Action.HEAVY_SHOOT:
             # 重射撃は通常+1、大成功ならさらに+2
-            apply_damage(rng, attacker, defender, 4, 0, 1 + crit_bonus, log, "重射撃")
+            control_reasons = ["重射撃+1"] + list(rule_reasons)
+            if crit_bonus:
+                control_reasons.append("大成功+2")
+            apply_damage(rng, attacker, defender, 4, 0, 1 + crit_bonus + rule_bonus, log, "重射撃", control_reasons)
 
 
 def curve_control(
@@ -1073,6 +1290,7 @@ def resolve_movement_action(
         return
 
     if action == Action.DEFEND:
+        # Ver.0.5.1 C: 防御走行は安定回復のみ。先行点は得られない。
         t.recover_stability(1)
         if log is not None:
             log.append(f"  {t.name}:防御走行 安定+1")
