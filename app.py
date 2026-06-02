@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
+import hashlib
+import json
 import random
 import re
 
@@ -39,9 +41,11 @@ STATE: Dict[str, Any] = {
 DEFAULT_ODDS_SIMULATIONS = 1000
 MIN_ODDS_SIMULATIONS = 100
 MAX_ODDS_SIMULATIONS = 10000
+MOCK_HISTORY_RACES = 10
 MIN_ODDS = 1.1
 MAX_ODDS = 99.9
 BET_PAYOUT_POOL = 0.9
+ACCIDENT_PAYOUT_POOL = 0.85
 
 COMBO_BET_TARGET_COUNTS = {
     "exacta": 2,
@@ -92,6 +96,7 @@ def tank_to_public_dict(t: sim_engine.TankSpec) -> Dict[str, Any]:
         "drive": t.drive,
         "ammo": t.ammo,
         "hp": t.hp,
+        "ai": t.ai,
     }
 
 
@@ -121,6 +126,12 @@ def combo_odds_from_counts(counts: Dict[str, int], simulations: int) -> Dict[str
     }
 
 
+def stable_seed(*parts: Any) -> int:
+    payload = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
+    digest = hashlib.sha256(payload.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
 def calculate_odds(rank: str, program: str, simulations: int, seed: Optional[int] = None) -> Dict[str, Any]:
     sim_seed = seed if seed is not None else random.randint(1, 999999999)
     rng = random.Random(sim_seed)
@@ -135,9 +146,12 @@ def calculate_odds(rank: str, program: str, simulations: int, seed: Optional[int
         "trifecta": {},
         "perfect": {},
     }
+    accident_runs = 0
 
     for _ in range(simulations):
         result = sim_engine.race_once(specs, rng, log_enabled=False)
+        if result.accident_count > 0:
+            accident_runs += 1
         final_names = [t.name for t in result.order]
         combo_keys = {
             "exacta": combo_key(final_names[:2]),
@@ -184,6 +198,12 @@ def calculate_odds(rank: str, program: str, simulations: int, seed: Optional[int
         "simulations": simulations,
         "seed": sim_seed,
         "tanks": tank_rows,
+        "accidentOdds": {
+            "withAccidentRate": accident_runs / max(1, simulations),
+            "withoutAccidentRate": (simulations - accident_runs) / max(1, simulations),
+            "withAccidentOdds": odds_value(ACCIDENT_PAYOUT_POOL, accident_runs / max(1, simulations)),
+            "withoutAccidentOdds": odds_value(ACCIDENT_PAYOUT_POOL, (simulations - accident_runs) / max(1, simulations)),
+        },
         "comboOdds": {
             bet_type: combo_odds_from_counts(counts, simulations)
             for bet_type, counts in combo_counts.items()
@@ -277,6 +297,206 @@ def evaluate_bet_result(race: Dict[str, Any], odds: Dict[str, Any], bet: Dict[st
         "profit": payout - stake,
         "finalOrder": final_order,
     }
+
+
+def tank_spec_from_public_dict(tank: Dict[str, Any]) -> sim_engine.TankSpec:
+    return sim_engine.TankSpec(
+        name=str(tank.get("name", "")),
+        style=str(tank.get("style", "")),
+        rank=str(tank.get("rank", "")),
+        mobility=int(tank.get("mobility", 0)),
+        handling=int(tank.get("handling", 0)),
+        armor=int(tank.get("armor", 0)),
+        firepower=int(tank.get("firepower", 0)),
+        stability=int(tank.get("stability", 0)),
+        drive=int(tank.get("drive", 0)),
+        ammo=int(tank.get("ammo", 0)),
+        hp=int(tank.get("hp", 0)),
+        ai=str(tank.get("ai") or tank.get("style", "")),
+    )
+
+
+def server_odds_matches_race(odds: Optional[Dict[str, Any]], race: Dict[str, Any]) -> bool:
+    return bool(
+        odds
+        and odds.get("rank") == race.get("rank")
+        and odds.get("program") == race.get("program")
+    )
+
+
+def odds_for_announcement(race: Dict[str, Any]) -> Dict[str, Any]:
+    odds = race.get("odds") or STATE.get("odds")
+    if server_odds_matches_race(odds, race) and odds and odds.get("accidentOdds"):
+        return odds
+
+    simulations = DEFAULT_ODDS_SIMULATIONS
+    seed = stable_seed(
+        "announcement-odds",
+        race.get("seed"),
+        race.get("rank"),
+        race.get("program"),
+        [t.get("name") for t in race.get("tanks", [])],
+    )
+    if server_odds_matches_race(odds, race) and odds:
+        simulations = clamp_simulations(odds.get("simulations", DEFAULT_ODDS_SIMULATIONS))
+        try:
+            seed = int(odds.get("seed", seed))
+        except (TypeError, ValueError):
+            pass
+
+    generated = calculate_odds(str(race.get("rank", "A")), str(race.get("program", "standard")), simulations, seed)
+    STATE["odds"] = generated
+    race["odds"] = generated
+    return generated
+
+
+STYLE_FEATURES = {
+    "逃げ": "序盤から前へ出て主導権を握る逃げ型。",
+    "追込": "後半の伸びと位置取りで勝負する追込型。",
+    "万能": "展開に合わせて攻防を切り替える万能型。",
+    "重戦車": "装甲と耐久で押し込む重戦車型。",
+    "射撃": "火力と弾薬で相手を崩す射撃型。",
+    "荒くれ": "危険行動も辞さない荒くれ型。",
+}
+
+
+def tank_feature_description(spec: sim_engine.TankSpec) -> str:
+    stat_names = [
+        ("機動力", spec.mobility),
+        ("操縦性", spec.handling),
+        ("装甲", spec.armor),
+        ("火力", spec.firepower),
+        ("安定値", spec.stability),
+        ("駆動力", spec.drive),
+        ("弾薬", spec.ammo),
+    ]
+    top_stats = sorted(stat_names, key=lambda item: item[1], reverse=True)[:2]
+    strengths = "・".join(f"{label}{value}" for label, value in top_stats)
+    base = STYLE_FEATURES.get(spec.style, f"{spec.style}型。")
+    return f"{base} {strengths}を軸に戦う車両。"
+
+
+def related_programs_for_tank(rank: str, spec: sim_engine.TankSpec) -> List[str]:
+    related: List[str] = []
+    for program in sim_engine.program_names():
+        program_specs = sim_engine.make_program(rank, program)
+        exact_entry = any(s.name == spec.name for s in program_specs)
+        style_entry = any(s.style == spec.style for s in program_specs)
+        if exact_entry or style_entry:
+            related.append(program)
+    return related or ["standard"]
+
+
+def program_specs_with_target(
+    rank: str,
+    program: str,
+    target: sim_engine.TankSpec,
+    rng: random.Random,
+) -> List[sim_engine.TankSpec]:
+    specs = list(sim_engine.make_program(rank, program))
+    if any(s.name == target.name for s in specs):
+        return specs
+
+    same_style_positions = [idx for idx, spec in enumerate(specs) if spec.style == target.style]
+    if same_style_positions:
+        specs[rng.choice(same_style_positions)] = target
+    elif specs:
+        specs[rng.randrange(len(specs))] = target
+    return specs
+
+
+def mock_history_for_tank(
+    rank: str,
+    race_seed: Any,
+    roster_signature: List[str],
+    spec: sim_engine.TankSpec,
+) -> Dict[str, Any]:
+    rng = random.Random(stable_seed("mock-history", race_seed, roster_signature, spec.name))
+    related_programs = related_programs_for_tank(rank, spec)
+    stats = {"starts": 0, "wins": 0, "top3": 0, "retirements": 0}
+    used_programs: List[str] = []
+
+    for _ in range(MOCK_HISTORY_RACES):
+        program = rng.choice(related_programs)
+        used_programs.append(program)
+        specs = program_specs_with_target(rank, program, spec, rng)
+        result = sim_engine.race_once(specs, rng, log_enabled=False)
+        rank_by_name = {t.name: idx + 1 for idx, t in enumerate(result.order)}
+        target_state = next((state for state in result.states if state.name == spec.name), None)
+        if target_state is None:
+            continue
+
+        stats["starts"] += 1
+        position = rank_by_name.get(spec.name)
+        if position == 1:
+            stats["wins"] += 1
+        if position is not None and position <= 3:
+            stats["top3"] += 1
+        if target_state.retired:
+            stats["retirements"] += 1
+
+    stats["programs"] = used_programs
+    return stats
+
+
+def mock_histories_for_race(race: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    rank = str(race.get("rank", "A"))
+    specs = [tank_spec_from_public_dict(tank) for tank in race.get("tanks", [])]
+    roster_signature = [f"{s.name}:{s.style}:{s.rank}" for s in specs]
+    return {
+        spec.name: mock_history_for_tank(rank, race.get("seed"), roster_signature, spec)
+        for spec in specs
+    }
+
+
+def history_line(history: Dict[str, Any]) -> str:
+    return (
+        f"通算戦績：{history.get('starts', 0)}戦{history.get('wins', 0)}勝 / "
+        f"3着内{history.get('top3', 0)}回 / リタイア{history.get('retirements', 0)}回"
+    )
+
+
+def display_odds(value: Any) -> str:
+    try:
+        return f"{float(value):.1f}倍"
+    except (TypeError, ValueError):
+        return "未計算"
+
+
+def odds_row_by_name(odds: Dict[str, Any], name: str) -> Dict[str, Any]:
+    return next((row for row in odds.get("tanks", []) if row.get("name") == name), {})
+
+
+def build_pre_race_announcement(race: Dict[str, Any], odds: Dict[str, Any], histories: Dict[str, Dict[str, Any]]) -> str:
+    specs = [tank_spec_from_public_dict(tank) for tank in race.get("tanks", [])]
+    accident_odds = odds.get("accidentOdds", {})
+    lines = [
+        f"## {race.get('rank')}級 {race.get('programLabel', race.get('program'))} 出走告知",
+        f"seed: `{race.get('seed')}`",
+        "",
+        "### 出走車両",
+    ]
+
+    for index, spec in enumerate(specs, 1):
+        row = odds_row_by_name(odds, spec.name)
+        lines.extend([
+            f"**{index}. {spec.name}（{spec.style}）**",
+            f"- 特徴：{tank_feature_description(spec)}",
+            f"- {history_line(histories.get(spec.name, {}))}",
+            f"- オッズ：単勝 {display_odds(row.get('winOdds'))} / 複勝 {display_odds(row.get('placeOdds'))}",
+            "",
+        ])
+
+    lines.extend([
+        "### 事故オッズ",
+        (
+            "事故ありオッズ："
+            f"{display_odds(accident_odds.get('withAccidentOdds'))} / "
+            "事故なしオッズ："
+            f"{display_odds(accident_odds.get('withoutAccidentOdds'))}"
+        ),
+    ])
+    return "\n".join(lines)
 
 
 def initial_board(specs: List[sim_engine.TankSpec]) -> Dict[str, Dict[str, Any]]:
@@ -1111,6 +1331,23 @@ def api_calculate_odds():
     if race and race.get("rank") == rank and race.get("program") == program:
         race["odds"] = odds
     return jsonify({"ok": True, "odds": odds})
+
+
+@app.post("/api/pre_race_announcement")
+def api_pre_race_announcement():
+    race = STATE.get("race")
+    if race is None:
+        return jsonify({"ok": False, "error": "race is not initialized"}), 400
+
+    odds = odds_for_announcement(race)
+    histories = mock_histories_for_race(race)
+    announcement = build_pre_race_announcement(race, odds, histories)
+    return jsonify({
+        "ok": True,
+        "announcement": announcement,
+        "histories": histories,
+        "odds": odds,
+    })
 
 
 @app.post("/api/evaluate_bet")

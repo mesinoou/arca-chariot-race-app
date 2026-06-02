@@ -5,6 +5,8 @@ let currentEvent = null;
 let autoPlaying = false;
 let autoTimer = null;
 let currentOdds = null;
+let currentAnnouncement = '';
+let announcementRaceKey = '';
 let pendingRaceStartAction = null;
 let oddsWarningBypassRaceKey = '';
 
@@ -250,10 +252,18 @@ function renderOdds(odds) {
   currentOdds = odds;
   if (!odds) return;
 
+  const accident = odds.accidentOdds || {};
+  const accidentSummary = accident.withAccidentOdds
+    ? `
+      <div class="odds-chip">事故あり ${oddsText(accident.withAccidentOdds)}</div>
+      <div class="odds-chip">事故なし ${oddsText(accident.withoutAccidentOdds)}</div>
+    `
+    : '';
   document.getElementById('oddsStatus').textContent =
     `${odds.rank}級 ${odds.programLabel} / ${odds.simulations}回 / sim seed ${odds.seed}`;
   document.getElementById('oddsSummary').innerHTML = `
     <div class="odds-chip">連単・連複・三連単・パーフェクト対応</div>
+    ${accidentSummary}
   `;
   document.getElementById('oddsTable').innerHTML = `
     <table>
@@ -288,6 +298,76 @@ function renderBetResult(result) {
     <strong>${hitText}</strong> ${BET_LABELS[result.type]}${targetText}<br>
     掛け金 ${result.stake} / オッズ ${oddsText(result.odds)} / 払戻額 ${result.payout} / 利益 ${result.profit}
   `;
+}
+
+function setAnnouncementStatus(text) {
+  const status = document.getElementById('announcementStatus');
+  if (status) status.textContent = text;
+}
+
+function renderAnnouncement(markdown) {
+  currentAnnouncement = markdown || '';
+  announcementRaceKey = currentAnnouncement ? raceKey() : '';
+  document.getElementById('announcementText').value = currentAnnouncement;
+}
+
+function clearAnnouncement(message = 'レース生成後にMarkdown告知文を生成できます。') {
+  currentAnnouncement = '';
+  announcementRaceKey = '';
+  const text = document.getElementById('announcementText');
+  if (text) text.value = '';
+  setAnnouncementStatus(message);
+}
+
+async function generateAnnouncement() {
+  if (!currentRace) {
+    setAnnouncementStatus('先にレースを生成してください。');
+    return;
+  }
+
+  const button = document.getElementById('generateAnnouncement');
+  button.disabled = true;
+  setAnnouncementStatus('告知文生成中...');
+  try {
+    const result = await postJSON('/api/pre_race_announcement');
+    if (!result.ok) {
+      setAnnouncementStatus(result.error || '告知文生成に失敗しました。');
+      return;
+    }
+    renderAnnouncement(result.announcement || '');
+    if (result.odds) renderOdds(result.odds);
+    setOddsStartWarning(false);
+    setAnnouncementStatus('Markdown告知文を生成しました。');
+    await refresh();
+  } catch (error) {
+    console.error(error);
+    setAnnouncementStatus('告知文生成に失敗しました。');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function copyAnnouncement() {
+  const text = document.getElementById('announcementText');
+  const value = text.value || currentAnnouncement;
+  if (!value) {
+    setAnnouncementStatus('先に告知文を生成してください。');
+    return;
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      text.focus();
+      text.select();
+      document.execCommand('copy');
+    }
+    setAnnouncementStatus('告知文をコピーしました。');
+  } catch (error) {
+    console.error(error);
+    setAnnouncementStatus('コピーに失敗しました。textareaから直接選択してください。');
+  }
 }
 
 function getAutoIntervalMs() {
@@ -426,6 +506,9 @@ function renderControl(state) {
   currentIndex = stateIndex(state);
   currentTotalEvents = stateTotalEvents(state);
   currentEvent = stateCurrentEvent(state);
+  if (currentAnnouncement && announcementRaceKey && announcementRaceKey !== raceKey()) {
+    clearAnnouncement('レースが変わったため告知文をクリアしました。');
+  }
   const raceOdds = state.odds || currentRace.odds || null;
   const keepSelectionOdds = oddsMatchCurrentSelection(currentOdds);
   if (oddsMatchesRace(raceOdds, currentRace) && !keepSelectionOdds) {
@@ -484,6 +567,7 @@ document.getElementById('newRace').addEventListener('click', async () => {
   const {rank, program, seed} = selectedRaceConfig();
   setOddsStartWarning(false);
   oddsWarningBypassRaceKey = '';
+  clearAnnouncement('新しいレース用の告知文を生成できます。');
   const state = await postJSON('/api/new_race', {rank, program, seed});
   renderControl(state);
 });
@@ -537,6 +621,8 @@ document.getElementById('program').addEventListener('change', () => setOddsStart
 document.getElementById('betType').addEventListener('change', updateBetTargetOptions);
 document.getElementById('betTargets').addEventListener('change', renderBetPreview);
 document.getElementById('betStake').addEventListener('input', renderBetPreview);
+document.getElementById('generateAnnouncement').addEventListener('click', generateAnnouncement);
+document.getElementById('copyAnnouncement').addEventListener('click', copyAnnouncement);
 
 document.getElementById('evaluateBet').addEventListener('click', async () => {
   if (!currentRace) {
