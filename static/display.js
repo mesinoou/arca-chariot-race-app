@@ -15,6 +15,7 @@ const DICE_RESULT_CLASSES = [
   'dice-panel--fumble',
 ];
 const TRACK_AREAS = ['後列', '中列', '前列'];
+const AREA_PROGRESS_OFFSET = {'後列': 4, '中列': 8, '前列': 12};
 const BOTTOM_MODE_CLASSES = ['mode-normal', 'mode-opposed', 'mode-cutin', 'normal-has-dice'];
 const DICE_TARGETS = {
   normal: {
@@ -76,6 +77,39 @@ function boardRanking(board) {
     if ((b.lead || 0) !== (a.lead || 0)) return (b.lead || 0) - (a.lead || 0);
     return (b.hp || 0) - (a.hp || 0);
   });
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function progressForTank(tank, event) {
+  if (event.type === 'goal') return 100;
+
+  const round = clampNumber(Number(event.round || 0), 0, 6);
+  const area = TRACK_AREAS.includes(tank.area) ? tank.area : '中列';
+  const areaOffset = AREA_PROGRESS_OFFSET[area] || AREA_PROGRESS_OFFSET['中列'];
+  const leadOffset = clampNumber(Number(tank.lead || 0), 0, 8) * 0.8;
+
+  if (round <= 0) {
+    return clampNumber(areaOffset * 0.6 + leadOffset, 0, 12);
+  }
+
+  const roundBase = ((round - 1) / 6) * 100;
+  return clampNumber(roundBase + areaOffset + leadOffset, 0, 100);
+}
+
+function raceProgressForOverview(ranking, event) {
+  if (event.type === 'goal') return 100;
+  const active = ranking.filter(tank => !tank.retired);
+  if (!active.length) return clampNumber(((Number(event.round || 0) - 1) / 6) * 100, 0, 100);
+  return Math.max(...active.map(tank => progressForTank(tank, event)), 0);
+}
+
+function markerName(name) {
+  const chars = Array.from(safeText(name));
+  if (chars.length <= 5) return chars.join('');
+  return `${chars.slice(0, 4).join('')}…`;
 }
 
 function escapeHtml(value) {
@@ -348,27 +382,35 @@ function latestActionsByActor(race, eventIndex, round) {
 }
 
 function renderRaceOverview(board, event) {
-  const lanes = {'後列': [], '中列': [], '前列': []};
-  boardRanking(board).forEach(tank => {
-    const area = TRACK_AREAS.includes(tank.area) ? tank.area : '中列';
-    lanes[area].push(tank);
-  });
+  const ranking = boardRanking(board);
+  const progress = raceProgressForOverview(ranking, event);
 
   document.getElementById('overviewMeta').textContent =
     event.actor ? `注目: ${event.actor}${event.target ? ` / 標的: ${event.target}` : ''}` : '全体俯瞰';
 
-  document.getElementById('raceOverview').innerHTML = TRACK_AREAS.map(area => `
-    <div class="overview-lane">
-      <div class="overview-lane-title">${area}<span>${lanes[area].length}</span></div>
-      <div class="overview-tokens">
-        ${lanes[area].map(tank => `
-          <span class="overview-token ${tank.name === event.actor ? 'is-actor' : ''} ${tank.name === event.target ? 'is-target' : ''} ${tank.retired ? 'is-retired' : ''}">
-            ${escapeHtml(tank.name)}
-          </span>
-        `).join('')}
+  document.getElementById('raceOverview').innerHTML = `
+    <div class="overview-progress">
+      <div class="progress-endpoint">START</div>
+      <div class="progress-rail" aria-label="レース進捗">
+        <div class="progress-line"></div>
+        <div class="progress-fill" style="width: ${progress.toFixed(1)}%"></div>
+        ${ranking.map((tank, index) => {
+          const tankProgress = progressForTank(tank, event);
+          const markerLeft = clampNumber(tankProgress, 6, 94);
+          const markerRow = Math.min(index, 5);
+          return `
+            <div class="progress-marker ${tank.name === event.actor ? 'is-actor' : ''} ${tank.name === event.target ? 'is-target' : ''} ${tank.retired ? 'is-retired' : ''}"
+              style="left: ${markerLeft.toFixed(1)}%; --marker-row: ${markerRow};"
+              title="${escapeHtml(tank.name)} / ${escapeHtml(tank.area)} / 先行${tank.lead}">
+              <span class="progress-dot">${index + 1}</span>
+              <span class="progress-name">${escapeHtml(markerName(tank.name))}</span>
+            </div>
+          `;
+        }).join('')}
       </div>
+      <div class="progress-endpoint">GOAL</div>
     </div>
-  `).join('');
+  `;
 }
 
 function summaryClass(event) {

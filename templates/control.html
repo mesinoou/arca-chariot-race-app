@@ -96,6 +96,16 @@
     <div id="betResult" class="bet-result">レース終了後に払戻計算できます。</div>
   </section>
 
+  <section class="panel">
+    <h2>レース前告知文</h2>
+    <div class="announcement-controls">
+      <button id="generateAnnouncement">告知文生成</button>
+      <button id="copyAnnouncement" class="secondary" type="button">コピー</button>
+      <div id="announcementStatus" class="auto-status">レース生成後にMarkdown告知文を生成できます。</div>
+    </div>
+    <textarea id="announcementText" class="announcement-text" readonly placeholder="ここにDiscord貼り付け用のMarkdown告知文が表示されます。"></textarea>
+  </section>
+
   <section class="panel split">
     <div>
       <h2>出走表</h2>
