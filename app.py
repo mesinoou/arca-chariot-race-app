@@ -10,7 +10,7 @@
     GM管理画面:        http://127.0.0.1:5000/control
     Discord共有画面:   http://127.0.0.1:5000/display
 
-このMVPは、sim_engine.py の Ver.0.4 簡易シミュレーターを利用し、
+このMVPは、sim_engine.py の Ver.0.5.1 簡易シミュレーターを利用し、
 1レース分の詳細ログをイベント列に変換してブラウザ上で再生します。
 """
 
@@ -365,7 +365,10 @@ def target_from_log(line: str, names: List[str], actor: Optional[str]) -> Option
 
 
 def classify_log_line(line: str) -> str:
-    if "事故判定" in line or "大破" in line or "横転" in line or "激突" in line:
+    accident_result_terms = ("大破", "横転", "激突", "車体損傷", "奇跡の復帰", "耐久0")
+    if "事故判定" in line or any(term in line for term in accident_result_terms):
+        return "accident"
+    if line.strip().startswith("→") and "立て直し" in line:
         return "accident"
     if "命中" in line:
         return "hit"
@@ -532,6 +535,46 @@ def action_label(event: Dict[str, Any]) -> str:
     return title or "行動"
 
 
+def accident_result_key(result: str) -> str:
+    if result == "大破リタイア":
+        return "accident_result_destroyed"
+    if result == "横転":
+        return "accident_result_rollover"
+    if result == "激突":
+        return "accident_result_crash"
+    if result == "車体損傷":
+        return "accident_result_damage"
+    if result == "立て直し":
+        return "accident_result_recover"
+    if result == "奇跡の復帰":
+        return "accident_result_miracle"
+    if result == "耐久0でリタイア":
+        return "accident_result_hp_zero"
+    return "accident_result"
+
+
+def accident_result_audience_text(event: Dict[str, Any]) -> str:
+    subject = event_subject(event)
+    result = str(event.get("accidentResult") or "")
+    roll = event.get("accidentRoll")
+    roll_text = str(roll) if roll not in (None, "") else "?"
+    defaults = {
+        "大破リタイア": "事故ダイスは{roll}。{subject}は大破、リタイア！",
+        "横転": "事故ダイスは{roll}。{subject}が横転！ 後列へ弾かれ、車体に大きな損傷！",
+        "激突": "事故ダイスは{roll}。{subject}が激突！ 隊列を下げ、車体を削られる！",
+        "車体損傷": "事故ダイスは{roll}。{subject}の車体が損傷！ 火花を散らして走行を続ける。",
+        "立て直し": "事故ダイスは{roll}。{subject}が必死に立て直す！ なんとか姿勢を戻した。",
+        "奇跡の復帰": "事故ダイスは{roll}。{subject}が奇跡の復帰！ 土煙を割ってレースへ戻る。",
+        "耐久0でリタイア": "事故ダイスは{roll}。{subject}は耐久が尽き、リタイア！",
+    }
+    return audience_template(
+        accident_result_key(result),
+        defaults.get(result, "事故ダイスは{roll}。{subject}に事故結果が降りかかる！"),
+        subject=subject,
+        roll=roll_text,
+    )
+
+
 def audience_text_for_event(event: Dict[str, Any]) -> str:
     event_type = event.get("type", "")
     text = str(event.get("text") or "")
@@ -557,6 +600,10 @@ def audience_text_for_event(event: Dict[str, Any]) -> str:
         return audience_template("hit_with_target", "{actor}の妨害が{target}を捕らえた！", actor=actor, target=target)
     if event_type == "hit":
         return audience_template("hit", "{subject}に衝撃が走る！", subject=event_subject(event))
+    if event_type == "accident" and event.get("accidentResult"):
+        return accident_result_audience_text(event)
+    if event_type == "accident_roll":
+        return audience_template("accident_roll", "事故判定のダイスが転がる。")
     if event_type == "accident":
         if "大破" in text or "リタイア" in text:
             return audience_template(
@@ -605,7 +652,12 @@ def summary_text_for_event(event: Dict[str, Any]) -> str:
     if event_type == "goal":
         return "ゴール"
     if event_type == "accident":
+        if event.get("accidentResult"):
+            actor_prefix = f"{actor}: " if actor else ""
+            return f"{actor_prefix}事故 {event.get('accidentResult')}".strip()
         return "事故"
+    if event_type == "accident_roll":
+        return "事故判定"
     return str(event.get("title") or event.get("text") or "イベント")
 
 
@@ -613,6 +665,8 @@ def is_visible_to_audience(event: Dict[str, Any]) -> bool:
     event_type = event.get("type", "")
     text = str(event.get("gm_text") or event.get("text") or "")
     if event_type == "ranking_update":
+        return False
+    if event_type == "accident_roll":
         return False
     if event_type == "log":
         return "奇跡" in text or "復帰" in text or "リタイア" in text
@@ -709,9 +763,75 @@ def log_to_events(
     })
 
     current_round = 0
+    pending_accident: Optional[Dict[str, Any]] = None
     for raw in log_lines:
         line = raw.rstrip()
         if not line:
+            continue
+
+        accident_roll_match = re.search(
+            r"事故判定(?::\s*(?P<actor>.+?)\((?P<reason>.*?)\)|\((?P<old_reason>.*?)\)):\s*1d6=(?P<roll>[1-6])",
+            line,
+        )
+        if accident_roll_match:
+            actor = (accident_roll_match.group("actor") or "").strip() or actor_from_log(line, names)
+            reason = accident_roll_match.group("reason") or accident_roll_match.group("old_reason") or ""
+            pending_accident = {
+                "actor": actor,
+                "reason": reason,
+                "roll": int(accident_roll_match.group("roll")),
+                "gm_text": line.strip(),
+            }
+            events.append({
+                "type": "accident_roll",
+                "round": current_round,
+                "actor": actor,
+                "title": "事故判定",
+                "text": line.strip(),
+                "gm_text": line.strip(),
+                "board": board,
+                "accidentRoll": pending_accident["roll"],
+                "accidentReason": reason,
+                "audience_visible": False,
+                "importance": "hidden",
+            })
+            continue
+
+        accident_result_match = re.search(
+            r"→\s*(?:(?P<actor>.+?)\s+)?(?P<result>大破リタイア|横転|激突|車体損傷|立て直し|奇跡の復帰|耐久0でリタイア)",
+            line,
+        )
+        if accident_result_match:
+            actor = (accident_result_match.group("actor") or "").strip()
+            if actor not in names:
+                actor = str((pending_accident or {}).get("actor") or actor_from_log(line, names) or "")
+            result_name = accident_result_match.group("result")
+            roll = (pending_accident or {}).get("roll")
+            reason = str((pending_accident or {}).get("reason") or "")
+            board = {k: dict(v) for k, v in board.items()}
+            if actor in board:
+                board[actor]["highlight"] = "accident"
+                if result_name in ("大破リタイア", "耐久0でリタイア"):
+                    board[actor]["retired"] = True
+                    board[actor]["hp"] = 0
+                elif result_name == "横転":
+                    board[actor]["area"] = "後列"
+            events.append({
+                "type": "accident",
+                "round": current_round,
+                "actor": actor or None,
+                "title": f"事故結果：{result_name}",
+                "text": line.strip(),
+                "gm_text": line.strip(),
+                "board": board,
+                "accidentRoll": roll,
+                "accidentResult": result_name,
+                "accidentReason": reason,
+            })
+            if actor in board:
+                board = {k: dict(v) for k, v in board.items()}
+                board[actor]["highlight"] = ""
+            pending_accident = None
             continue
 
         if line.strip() == "=== 配置決めフェーズ ===":
