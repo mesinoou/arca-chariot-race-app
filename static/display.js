@@ -217,7 +217,7 @@ function showDicePanel(role, diceInfo, labelOverride = '') {
   setDicePanelHidden(role, false);
   setDiceResultClass(role, '');
   setDiceText(role, 'label', labelOverride || diceInfo.label || '判定');
-  setDiceText(role, 'formula', diceInfo.breakdown || '');
+  setDiceText(role, 'formula', diceInfo.audienceBreakdown || '');
   setDiceText(role, 'targetLabel', diceInfo.targetLabel || '目標');
   setDiceText(role, 'target', diceInfo.target ?? '-');
   setDiceText(role, 'result', '判定中');
@@ -284,13 +284,14 @@ function typewriterText(element, text) {
 function eventEmphasisClass(event) {
   const type = safeText(event.type);
   const title = safeText(event.title);
-  const text = safeText(event.text);
+  const text = safeText(event.audience_text || event.text);
   const combined = `${title} ${text}`;
 
   if (type === 'goal') return 'cinema-log--goal';
   if (type === 'accident' || combined.includes('事故') || combined.includes('大破') || combined.includes('横転')) {
     return 'cinema-log--accident';
   }
+  if (event.importance === 'critical') return 'cinema-log--crit';
   if (type === 'hit' || combined.includes('命中')) return 'cinema-log--hit';
   if (combined.includes('大成功')) return 'cinema-log--crit';
   if (type === 'success') return 'cinema-log--success';
@@ -323,14 +324,16 @@ function setNormalDiceLayout(hasDice) {
 }
 
 function isMajorEvent(event) {
-  const combined = `${safeText(event.type)} ${safeText(event.title)} ${safeText(event.text)}`;
+  const combined = `${safeText(event.type)} ${safeText(event.title)} ${safeText(event.audience_text || event.text)}`;
+  if (event.importance === 'critical') return true;
   return event.type === 'goal' || event.type === 'accident' ||
     combined.includes('ゴール') || combined.includes('大破') || combined.includes('横転');
 }
 
 function bottomModeForEvent(event) {
-  if (isMajorEvent(event)) return 'cutin';
   if (event.diceInfo?.opposed) return 'opposed';
+  if (event.diceInfo) return 'normal';
+  if (isMajorEvent(event)) return 'cutin';
   return 'normal';
 }
 
@@ -416,7 +419,7 @@ function renderDuel(event, diceInfo) {
   setText('duelPassiveScore', passive.total ?? '-');
   setText('duelActiveScore', diceInfo.total ?? '-');
   setText('duelOutcome', diceInfo.result || '判定');
-  setText('duelText', event.text || diceInfo.breakdown || '');
+  setText('duelText', event.audience_text || event.text || '');
 }
 
 function renderCutin(event) {
@@ -425,13 +428,13 @@ function renderCutin(event) {
   const emphasisClass = eventEmphasisClass(event);
   if (emphasisClass) cutinPanel.classList.add(emphasisClass);
   setText('cutinTitle', event.title || '重大イベント');
-  typewriterText(document.getElementById('cutinText'), event.text || '');
+  typewriterText(document.getElementById('cutinText'), event.audience_text || event.text || '');
 }
 
 function renderNormalCommentary(event) {
   document.getElementById('eventTitle').textContent = event.title || '実況';
   updateCinemaEmphasis(event);
-  typewriterText(document.getElementById('eventText'), event.text);
+  typewriterText(document.getElementById('eventText'), event.audience_text || event.text);
 }
 
 function renderBottom(race, event, eventIndex, totalEvents, board) {
@@ -500,16 +503,17 @@ function conciseActionResult(event) {
 function renderDisplay(state) {
   if (!state || !state.ok || !state.race) return;
   const race = state.race;
-  const event = state.event || {};
+  const event = state.audience_event || state.event || {};
+  if (event.audience_visible === false) return;
   const board = event.board || {};
-  const eventIndex = state.current_index ?? state.index ?? 0;
-  const eventNumber = state.current_event_number ?? (eventIndex + 1);
-  const totalEvents = state.total_events ?? race.events.length;
+  const eventIndex = state.audience_index ?? state.current_index ?? state.index ?? 0;
+  const eventNumber = state.current_audience_event_number ?? state.current_event_number ?? (eventIndex + 1);
+  const totalEvents = state.total_audience_events ?? state.total_events ?? race.events.length;
   displayOdds = state.odds || race.odds || null;
 
   document.getElementById('raceTitle').textContent = `${race.rank}級 ${race.programLabel}`;
   document.getElementById('roundName').textContent = event.roundName || (event.round ? `第${event.round}R` : '開幕');
-  document.getElementById('seedBox').textContent = `seed: ${race.seed} / event ${eventNumber}/${totalEvents}`;
+  document.getElementById('seedBox').textContent = `seed: ${race.seed} / audience ${eventNumber}/${totalEvents}`;
   renderRaceOverview(board, event);
   renderBottom(race, event, eventIndex, totalEvents, board);
 
@@ -548,8 +552,9 @@ async function poll() {
   try {
     const state = await fetch('/api/state').then(r => r.json());
     const currentRaceKey = raceKey(state.race);
-    if (state.ok && (state.index !== lastIndex || currentRaceKey !== lastRaceKey)) {
-      lastIndex = state.index;
+    const visibleIndex = state.audience_index ?? state.index;
+    if (state.ok && (visibleIndex !== lastIndex || currentRaceKey !== lastRaceKey)) {
+      lastIndex = visibleIndex;
       lastRaceKey = currentRaceKey;
       renderDisplay(state);
     }

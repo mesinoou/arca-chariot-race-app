@@ -55,8 +55,18 @@ function currentEventNumber(state) {
 }
 
 function isLastEvent(state) {
+  if (state.is_last_audience_event !== undefined) return state.is_last_audience_event;
   const totalEvents = stateTotalEvents(state);
   return state.is_last_event ?? (totalEvents > 0 && stateIndex(state) >= totalEvents - 1);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function pct(value) {
@@ -339,7 +349,7 @@ function scheduleAutoPlay(event = currentEvent) {
 async function runAutoStep() {
   if (!autoPlaying) return;
 
-  const state = await postJSON('/api/next');
+  const state = await postJSON('/api/next_audience');
   if (!autoPlaying) return;
 
   if (!state.ok) {
@@ -388,7 +398,7 @@ async function nextEvent(options = {}) {
   }
 
   setOddsStartWarning(false);
-  const state = await postJSON('/api/next');
+  const state = await postJSON('/api/next_audience');
   if (state.ok) {
     renderControl(state);
     return;
@@ -424,8 +434,12 @@ function renderControl(state) {
     clearOddsView();
   }
 
-  document.getElementById('currentEvent').textContent =
-    `[${currentEventNumber(state)}/${currentTotalEvents}] ${currentEvent.title || '実況'}\n${currentEvent.text || ''}`;
+  document.getElementById('currentEvent').innerHTML = `
+    <div class="current-event-meta">詳細 ${currentEventNumber(state)}/${currentTotalEvents} / 観客 ${state.current_audience_event_number ?? '-'} / ${state.total_audience_events ?? '-'}</div>
+    <div><strong>${escapeHtml(currentEvent.title || '実況')}</strong> <span class="event-badge event-badge--${escapeHtml(currentEvent.importance || 'normal')}">${escapeHtml(currentEvent.importance || 'normal')}</span>${currentEvent.audience_visible === false ? '<span class="event-badge event-badge--hidden">観客非表示</span>' : ''}</div>
+    <div class="log-pair"><span>GM詳細</span><p>${escapeHtml(currentEvent.gm_text || currentEvent.text || '')}</p></div>
+    <div class="log-pair"><span>観客実況</span><p>${escapeHtml(currentEvent.audience_text || currentEvent.text || '')}</p></div>
+  `;
 
   const tankList = document.getElementById('tankList');
   const currentRaceOdds = oddsForCurrentRace();
@@ -443,8 +457,14 @@ function renderControl(state) {
 
   const eventList = document.getElementById('eventList');
   eventList.innerHTML = currentRace.events.map((e, i) => `
-    <div class="event-row ${i === currentIndex ? 'active' : ''}">
-      ${i + 1}. ${e.title || '実況'}<br><small>${e.text || ''}</small>
+    <div class="event-row ${i === currentIndex ? 'active' : ''} ${e.audience_visible === false ? 'event-row--hidden' : ''}">
+      <div>
+        ${i + 1}. ${escapeHtml(e.title || '実況')}
+        <span class="event-badge event-badge--${escapeHtml(e.importance || 'normal')}">${escapeHtml(e.importance || 'normal')}</span>
+        ${e.audience_visible === false ? '<span class="event-badge event-badge--hidden">観客非表示</span>' : ''}
+      </div>
+      <small><strong>GM:</strong> ${escapeHtml(e.gm_text || e.text || '')}</small>
+      <small><strong>観客:</strong> ${escapeHtml(e.audience_text || e.text || '')}</small>
     </div>
   `).join('');
 

@@ -86,6 +86,9 @@ COMBO_BET_TARGET_COUNTS = {
 def race_response_payload(race: Dict[str, Any], index: int) -> Dict[str, Any]:
     total_events = len(race["events"])
     safe_index = min(max(index, 0), total_events - 1)
+    visible_indices = audience_event_indices(race)
+    audience_index = audience_index_at_or_before(race, safe_index)
+    total_audience_events = len(visible_indices)
     return {
         "ok": True,
         "race": race,
@@ -95,6 +98,11 @@ def race_response_payload(race: Dict[str, Any], index: int) -> Dict[str, Any]:
         "total_events": total_events,
         "is_last_event": safe_index >= total_events - 1,
         "event": race["events"][safe_index],
+        "audience_index": audience_index,
+        "audience_event": race["events"][audience_index],
+        "current_audience_event_number": audience_event_number(race, audience_index),
+        "total_audience_events": total_audience_events,
+        "is_last_audience_event": bool(visible_indices) and audience_index >= visible_indices[-1],
         "odds": race.get("odds"),
     }
 
@@ -535,6 +543,168 @@ def parse_dice_info(line: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def event_subject(event: Dict[str, Any]) -> str:
+    return event.get("actor") or event.get("target") or "戦車"
+
+
+def action_label(event: Dict[str, Any]) -> str:
+    dice_info = event.get("diceInfo") or {}
+    if dice_info.get("label"):
+        return str(dice_info["label"])
+    title = str(event.get("title") or "")
+    if "：" in title:
+        return title.split("：", 1)[1]
+    text = str(event.get("gm_text") or event.get("text") or "")
+    match = re.match(r"[^:：]+[:：]([^ →]+)", text)
+    if match:
+        return match.group(1).split("→", 1)[0]
+    return title or "行動"
+
+
+def audience_text_for_event(event: Dict[str, Any]) -> str:
+    event_type = event.get("type", "")
+    text = str(event.get("text") or "")
+    actor = event.get("actor")
+    target = event.get("target")
+    label = action_label(event)
+    dice_info = event.get("diceInfo") or {}
+    result = str(dice_info.get("rawResult") or dice_info.get("result") or event.get("title") or "")
+
+    if event_type in ("title", "placement_start", "round_start", "placement", "move"):
+        return text
+    if event_type == "ranking_update":
+        return "隊列が更新された。"
+    if event_type == "goal":
+        order = event.get("order") or []
+        if order:
+            return "ゴール！ " + "、".join(f"{i + 1}着 {name}" for i, name in enumerate(order[:3]))
+        return "ゴール！ 最終順位が確定した。"
+    if event_type == "final_roll":
+        return f"{event_subject(event)}、最後の伸び脚を競る。"
+    if event_type == "hit" and actor and target:
+        return f"{actor}の妨害が{target}を捕らえた！"
+    if event_type == "hit":
+        return f"{event_subject(event)}に衝撃が走る！"
+    if event_type == "accident":
+        if "大破" in text or "リタイア" in text:
+            return f"{event_subject(event)}、大きく崩れてリタイア寸前！"
+        return "事故発生！ 車体が大きく跳ねる！"
+    if event_type == "success":
+        if "大成功" in text or dice_info.get("resultClass") == "crit":
+            return f"{event_subject(event)}、{label}で大成功！"
+        return f"{event_subject(event)}、{label}に成功！"
+    if event_type == "failure":
+        return f"{event_subject(event)}、{label}は伸びきらない！"
+    if event_type == "log" and ("奇跡" in text or "復帰" in text):
+        return "土煙の中から戦車が復帰する！"
+    return text
+
+
+def summary_text_for_event(event: Dict[str, Any]) -> str:
+    event_type = event.get("type", "")
+    actor = event.get("actor")
+    target = event.get("target")
+    label = action_label(event)
+    dice_info = event.get("diceInfo") or {}
+    result = dice_info.get("rawResult") or event.get("title") or ""
+
+    if event_type == "ranking_update":
+        return "暫定順位更新"
+    if event_type == "round_start":
+        return str(event.get("title") or "ラウンド開始")
+    if event_type == "placement":
+        return f"{actor}: {label}" if actor else label
+    if event_type == "move":
+        return f"{actor}: {event.get('from')}→{event.get('to')}"
+    if event_type == "hit" and actor and target:
+        return f"{actor}→{target}: 命中"
+    if event_type in ("success", "failure", "final_roll"):
+        prefix = f"{actor}: " if actor else ""
+        return f"{prefix}{label} {result}".strip()
+    if event_type == "goal":
+        return "ゴール"
+    if event_type == "accident":
+        return "事故"
+    return str(event.get("title") or event.get("text") or "イベント")
+
+
+def is_visible_to_audience(event: Dict[str, Any]) -> bool:
+    event_type = event.get("type", "")
+    text = str(event.get("gm_text") or event.get("text") or "")
+    if event_type == "ranking_update":
+        return False
+    if event_type == "log":
+        return "奇跡" in text or "復帰" in text or "リタイア" in text
+    if event_type == "success" and not event.get("actor") and "制御判定" in text:
+        return False
+    return True
+
+
+def importance_for_event(event: Dict[str, Any]) -> str:
+    if not event.get("audience_visible", True):
+        return "hidden"
+    event_type = event.get("type", "")
+    text = str(event.get("gm_text") or event.get("text") or event.get("audience_text") or "")
+    dice_info = event.get("diceInfo") or {}
+    if event_type == "goal":
+        return "critical"
+    if event_type == "accident" or "大破" in text or "リタイア" in text:
+        return "critical"
+    if "大成功" in text or dice_info.get("resultClass") == "crit":
+        return "critical"
+    if event_type == "hit":
+        return "high"
+    if event_type in ("title", "placement_start", "round_start", "move"):
+        return "normal"
+    if event_type in ("placement", "success", "failure", "final_roll"):
+        return "normal"
+    return "low"
+
+
+def enrich_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = dict(event)
+    enriched["gm_text"] = str(enriched.get("gm_text") or enriched.get("text") or "")
+    enriched["audience_text"] = str(enriched.get("audience_text") or audience_text_for_event(enriched))
+    enriched["summary_text"] = str(enriched.get("summary_text") or summary_text_for_event(enriched))
+    enriched["audience_visible"] = bool(enriched.get("audience_visible", is_visible_to_audience(enriched)))
+    enriched["importance"] = str(enriched.get("importance") or importance_for_event(enriched))
+    return enriched
+
+
+def audience_event_indices(race: Dict[str, Any]) -> List[int]:
+    return [
+        idx for idx, event in enumerate(race.get("events", []))
+        if event.get("audience_visible", True)
+    ]
+
+
+def audience_index_at_or_before(race: Dict[str, Any], index: int) -> int:
+    indices = audience_event_indices(race)
+    if not indices:
+        return min(max(index, 0), len(race.get("events", [])) - 1)
+    previous = [idx for idx in indices if idx <= index]
+    if previous:
+        return previous[-1]
+    return indices[0]
+
+
+def next_audience_index(race: Dict[str, Any], index: int) -> int:
+    indices = audience_event_indices(race)
+    if not indices:
+        return min(max(index + 1, 0), len(race.get("events", [])) - 1)
+    for idx in indices:
+        if idx > index:
+            return idx
+    return indices[-1]
+
+
+def audience_event_number(race: Dict[str, Any], audience_index: int) -> int:
+    indices = audience_event_indices(race)
+    if audience_index in indices:
+        return indices.index(audience_index) + 1
+    return max(1, len([idx for idx in indices if idx <= audience_index]))
+
+
 def log_to_events(
     log_lines: List[str],
     specs: List[sim_engine.TankSpec],
@@ -603,6 +773,7 @@ def log_to_events(
                 "actor": name,
                 "title": f"{name}：{intent}",
                 "text": text,
+                "gm_text": line.strip(),
                 "board": board,
                 "diceInfo": dice_info,
             })
@@ -632,6 +803,7 @@ def log_to_events(
                 "round": current_round,
                 "title": "暫定順位更新",
                 "text": line.replace("  暫定順位: ", ""),
+                "gm_text": line.strip(),
                 "board": board,
             })
             continue
@@ -652,6 +824,7 @@ def log_to_events(
                 "to": dst,
                 "title": f"{name}、{dst}へ！",
                 "text": f"{name}が隊列を押し上げ、{src}から{dst}へ躍り出る。",
+                "gm_text": line.strip(),
                 "board": board,
             })
             continue
@@ -664,6 +837,7 @@ def log_to_events(
                 "round": current_round,
                 "title": "ゴール！",
                 "text": order_text,
+                "gm_text": line.strip(),
                 "board": board,
                 "order": [t.name for t in result.order],
             })
@@ -679,6 +853,7 @@ def log_to_events(
                 "target": None,
                 "title": "最終順位判定",
                 "text": line.strip(),
+                "gm_text": line.strip(),
                 "board": board,
                 "diceInfo": dice_info,
             })
@@ -710,6 +885,7 @@ def log_to_events(
             "target": target,
             "title": title,
             "text": line.strip(),
+            "gm_text": line.strip(),
             "board": board,
             "diceInfo": dice_info,
         })
@@ -730,7 +906,7 @@ def log_to_events(
             "order": [t.name for t in result.order],
         })
 
-    return events
+    return [enrich_event(event) for event in events]
 
 
 def create_race(rank: str, program: str, seed: int) -> Dict[str, Any]:
@@ -826,6 +1002,15 @@ def api_next():
     if race is None:
         return jsonify({"ok": False, "error": "race is not initialized"}), 400
     STATE["index"] = min(STATE["index"] + 1, len(race["events"]) - 1)
+    return jsonify(race_response_payload(race, STATE["index"]))
+
+
+@app.post("/api/next_audience")
+def api_next_audience():
+    race = STATE.get("race")
+    if race is None:
+        return jsonify({"ok": False, "error": "race is not initialized"}), 400
+    STATE["index"] = next_audience_index(race, STATE.get("index", 0))
     return jsonify(race_response_payload(race, STATE["index"]))
 
 
